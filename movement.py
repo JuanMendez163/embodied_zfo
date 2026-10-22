@@ -27,7 +27,7 @@ def wrap_angle(theta):
     """
     Wrap an angle to [-pi, pi] (stable for any input, unlike modulo arithmetic).
     """
-    return math.atan2(math.sin(theta), math.cos(theta))
+    return np.arctan2(np.sin(theta), np.cos(theta))
 
 
 def propose_pose(position, heading, move_cmd, turn_cmd, max_speed, max_turn_rate, dt):
@@ -40,7 +40,7 @@ def propose_pose(position, heading, move_cmd, turn_cmd, max_speed, max_turn_rate
     delta_heading = turn_rate * dt # move that rate per time step
     new_heading = wrap_angle(heading + delta_heading)
     # speed * dt is magnitude of forward movement ; cos + sin relate that to the heading
-    proposed_position = position + np.array([math.cos(new_heading), math.sin(new_heading)]) * speed * dt
+    proposed_position = position + np.array([np.cos(new_heading), np.sin(new_heading)]) * speed * dt
 
     return proposed_position, new_heading
 
