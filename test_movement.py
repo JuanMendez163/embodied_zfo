@@ -1,5 +1,6 @@
 """
 Sanity checks for movement.py. Run with: pytest test_movement.py
+Helpful beyond the visualizations to make sure math is working out appropriately
 """
 
 import math
