@@ -2,10 +2,13 @@
 Video sanity check for movement.py: animate an agent moving inside an Arena.
 Run with: python animate_movement.py  (saves figures/movement.mp4)
 
-Three scenarios play side by side, one step per frame:
- - circle:     constant move + turn, should loop forever on the same circle
- - wall slide: straight into a wall at an angle, should slide along it and stop in the corner
- - swimming:   smoothly varying random commands
+Five scenarios play side by side, one step per frame:
+ - circle:        constant move + turn, should loop forever on the same circle
+ - wall slide:    straight into a wall at an angle, should slide along it and stop in the corner
+ - swimming:      smoothly varying random commands
+ - rectangle:     straight segments joined by 90° turns, should retrace the same rectangle
+ - rectangle-ish: a closed-loop fish steering toward the rectangle's corners, with rounded
+                  corners and noise, so each lap differs slightly
 """
 
 import math
@@ -17,7 +20,7 @@ from matplotlib.animation import FFMpegWriter, FuncAnimation
 from matplotlib.collections import LineCollection
 
 from arena import Arena
-from movement import step_pose
+from movement import step_pose, wrap_angle
 from plot_movement import smooth_random_commands
 
 MAX_SPEED = 10.0     # units/s
@@ -37,23 +40,117 @@ WALL_HIT = "#eb6834"
 
 def rollout(arena, position, heading, commands):
     """
-    Apply (move_cmd, turn_cmd) pairs inside the arena and record every step.
+    Step the agent inside the arena and record every step.
+    commands is either a precomputed sequence of (move_cmd, turn_cmd) pairs (open loop), or a
+    policy(position, heading) -> (move_cmd, turn_cmd) called for N_STEPS steps (closed loop).
     Returns a dict of arrays, one entry per step (index 0 is the start pose).
     """
+    if callable(commands):
+        policy, n_steps = commands, N_STEPS
+    else:
+        sequence = iter(commands)
+        policy, n_steps = (lambda _position, _heading: next(sequence)), len(commands)
+
     positions, headings, hits = [np.array(position, dtype=float)], [heading], [False]
-    for move_cmd, turn_cmd in commands:
+    taken = [(0.0, 0.0)]  # no command produced the start pose
+    for _ in range(n_steps):
+        move_cmd, turn_cmd = policy(positions[-1], headings[-1])
         pos, heading, hit_wall = step_pose(positions[-1], headings[-1], move_cmd, turn_cmd,
                                            MAX_SPEED, MAX_TURN, DT, arena.size, BODY_RADIUS)
         positions.append(pos)
         headings.append(heading)
         hits.append(hit_wall)
-    commands = [(0.0, 0.0)] + list(commands)  # no command produced the start pose
+        taken.append((move_cmd, turn_cmd))
+    commands = taken
     return {
         "positions": np.array(positions),
         "headings": np.array(headings),
         "hits": np.array(hits),
         "commands": np.array(commands),
     }
+
+
+def rectangle_commands(n_steps, long_side=40, short_side=20):
+    """
+    (move_cmd, turn_cmd) pairs that trace a rectangle counterclockwise, repeating until n_steps:
+    straight for long_side units, turn 90° left in place, straight for short_side units, turn 90° left, ...
+    Each straight step covers MAX_SPEED * DT units; a full-rate turn step rotates MAX_TURN * DT rad.
+    Step counts are truncated with int(), so sides and corners are exact only when these divide evenly.
+    """
+    long_steps = int(long_side / (MAX_SPEED * DT))
+    short_steps = int(short_side / (MAX_SPEED * DT))
+    turn_steps = int((math.pi / 2) / (MAX_TURN * DT))  # 90° left turn
+    commands = []
+    while len(commands) < n_steps:
+        commands.extend([(1.0, 0.0)] * long_steps)   # straight
+        commands.extend([(0.0, 1.0)] * turn_steps)   # turn left
+        commands.extend([(1.0, 0.0)] * short_steps)  # straight
+        commands.extend([(0.0, 1.0)] * turn_steps)   # turn left
+    return commands[:n_steps]
+
+
+class WaypointFish:
+    """
+    Closed-loop policy that swims a loop through waypoints the way a fish might:
+    it steers toward the current waypoint from wherever it actually is, turns while moving
+    (rounded corners), and adds smoothly varying noise to its commands.
+    Call it as policy(position, heading) -> (move_cmd, turn_cmd).
+    """
+
+    SPEED_MODES = ("coupled", "cruise", "cosine")
+
+    def __init__(self, waypoints, rng, arrive_radius=4.0, noise=0.15, smoothing=0.9,
+                 speed_mode="coupled", cruise_speed=0.3):
+        if speed_mode not in self.SPEED_MODES:
+            raise ValueError(f"speed_mode must be one of {self.SPEED_MODES}, got {speed_mode!r}")
+        self.waypoints = np.asarray(waypoints, dtype=float)
+        self.rng = rng
+        self.arrive_radius = arrive_radius  # switch to the next waypoint once this close
+        self.noise = noise                  # size of the command noise
+        self.smoothing = smoothing          # noise persistence, as in smooth_random_commands
+        self.speed_mode = speed_mode        # how forward speed drops while turning (see steer)
+        self.cruise_speed = cruise_speed    # "cruise" mode: minimum move_cmd, even in the sharpest turn
+        self.target = 0
+        self.corners_reached = 0  # total waypoint arrivals, across laps
+        self.noise_state = np.zeros(2)
+
+    def steer(self, heading_error):
+        """
+        Map heading_error (radians in [-pi, pi], the signed angle from the agent's heading to the
+        direction of the target; positive = target is to the left) to noise-free (move_cmd, turn_cmd).
+        speed_mode sets how move_cmd slows for turns:
+         - "coupled": 1 - |turn_cmd|; stops and pivots when the target is >= 90° away
+         - "cruise":  same shape, but never below cruise_speed, so corners are swept rather than pivoted
+         - "cosine":  cos(heading_error), set by the error itself rather than by turn_cmd, so
+                      changing the turning gain doesn't change the speed profile
+        """
+        # turn_cmd is proportional to heading_error, but clipped to [-1, 1]
+        turn_cmd = np.clip(heading_error / (math.pi / 2), -1.0, 1.0)
+        # move_cmd is 1.0 when heading_error is small, and decreases as heading_error grows
+        if self.speed_mode == "coupled":
+            move_cmd = 1.0 - abs(turn_cmd)
+        elif self.speed_mode == "cruise":
+            move_cmd = self.cruise_speed + (1.0 - self.cruise_speed) * (1.0 - abs(turn_cmd))
+        else:  # "cosine"
+            move_cmd = max(0.0, math.cos(heading_error))
+        return move_cmd, turn_cmd
+
+    def __call__(self, position, heading):
+        if np.linalg.norm(self.waypoints[self.target] - position) < self.arrive_radius:
+            self.target = (self.target + 1) % len(self.waypoints)
+            self.corners_reached += 1
+
+        to_target = self.waypoints[self.target] - position
+        heading_error = wrap_angle(math.atan2(to_target[1], to_target[0]) - heading)
+        move_cmd, turn_cmd = self.steer(heading_error)
+
+        self.noise_state = (self.smoothing * self.noise_state
+                            + (1 - self.smoothing) * self.rng.normal(0, self.noise / (1 - self.smoothing), size=2))
+        return (float(np.clip(move_cmd + self.noise_state[0], 0.0, 1.0)),
+                float(np.clip(turn_cmd + self.noise_state[1], -1.0, 1.0)))
+
+
+RECTANGLE_CORNERS = [[70, 35], [70, 55], [30, 55], [30, 35]]  # counterclockwise, same rectangle as above
 
 
 def scenarios(arena):
@@ -65,6 +162,11 @@ def scenarios(arena):
         ("Swimming (smooth random commands)",
          rollout(arena, arena.random_position(margin=20), 0.0,
                  smooth_random_commands(arena.np_random, N_STEPS))),
+        ("Rectangle (straight + 90° turns)",
+         rollout(arena, [30, 35], 0.0, rectangle_commands(N_STEPS))),
+        ("Rectangle-ish (fish steering to corners)",
+         {**rollout(arena, [30, 35], 0.0, WaypointFish(RECTANGLE_CORNERS, np.random.default_rng(1))),
+          "waypoints": np.array(RECTANGLE_CORNERS)}),
     ]
 
 
@@ -82,6 +184,8 @@ class AgentPanel:
         ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set_visible(False)
+        if "waypoints" in run:
+            ax.scatter(*run["waypoints"].T, marker="x", s=30, color=TEXT_MUTED, zorder=1)
 
         self.trail = LineCollection([], linewidths=2, capstyle="round")
         ax.add_collection(self.trail)
