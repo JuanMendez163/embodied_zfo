@@ -104,6 +104,22 @@ def test_cooldown_is_in_seconds_not_steps():
         assert blocked == steps_blocked
 
 
+def test_full_env_roughly_independent_of_dt():
+    # the same 20 s of fixed commands (no food) at two step sizes: glucose and position agree to O(dt)
+    # (compare_dt.py runs the full check and explains the residual)
+    end_state = {}
+    for dt in (0.1, 0.05):
+        env = ZebrafishEnv(n_food=0, episode_duration=20.0, dt=dt)
+        env.reset(seed=0)
+        env.position, env.heading = np.array([50.0, 50.0]), 0.0
+        for _ in range(env.max_steps):
+            t = env.step_count * dt
+            env.step([1.0, 0.15, 0.0] if t < 10.0 else [0.5, 1.0, 0.0])    # sprint, then a hard turn
+        end_state[dt] = (env.glucose, env.position.copy())
+    assert math.isclose(end_state[0.1][0], end_state[0.05][0], rel_tol=1e-2)
+    assert np.linalg.norm(end_state[0.1][1] - end_state[0.05][1]) < 1.0      # within one body radius
+
+
 def test_starvation_terminates():
     env = ZebrafishEnv()
     env.reset(seed=0)

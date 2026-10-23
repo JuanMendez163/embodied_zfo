@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-10-22_
+_Last updated: 2026-10-23_
 
 ## Status
 
@@ -15,9 +15,10 @@ _Last updated: 2026-10-22_
 | 3a. Glucose dynamics (was 2c) | Done | `metabolism.py`, `test_metabolism.py` |
 | 3b.1 Gymnasium env dynamics | Done | `env.py`, `test_env.py`, `animate_env.py` |
 | **3b.2 Observation** | **Next** | `env.py` (`obs_mode`) |
-| 3c. Further checks / RL training | Not started | |
+| 3c.1 dt-independence check of the full env | Done | `compare_dt.py`, `test_env.py` (`test_full_env_roughly_independent_of_dt`) |
+| 3c.2 RL training | Not started | |
 
-58 tests pass (`pytest -q`).
+60 tests pass (`pytest -q`).
 
 ## Next step: 3b.2 observation
 
@@ -66,10 +67,25 @@ Currently `obs_mode="internal"` returns only `[glucose / glucose_max, can_eat]` 
   previous step's (the latter needs the last action in the observation).
 - **Handling freeze** (wef stops movement during the eat cooldown): optional, not built.
 - **Second-order movement** (`motion_order=2` in wef) not ported.
-- **dt-independence check for the full env:** run the same scripted forager at `dt = 0.1` and `0.05`
-  and compare glucose traces over the same simulated time.
+- **dt-independence (checked 2026-10-23, `compare_dt.py`):** with fixed commands over 40 s and no food,
+  glucose at `dt = 0.05 / 0.02 / 0.01` differs from `dt = 0.1` by at most 0.014 and position by at most
+  0.6 units (during a hard turn). Both are O(dt) and come from (i) the movement cost being subtracted as a
+  lump after the exact decay, and (ii) turn-then-move kinematics. Either could be made exact for
+  piecewise-constant commands (`dg/dt = -k g - c` has the closed form `g e^{-k dt} - (c / k)(1 - e^{-k dt})`;
+  constant speed and turn rate trace an exact circular arc), but the residual is far below anything the
+  agent could notice, so neither was changed. The closed-loop forager is a different matter: eating is an
+  event checked once per env step, so at a finer dt a pellet can be caught up to one coarse step earlier,
+  which shifts one meal and, through the path, the rest of the episode (same eat count, final glucose within
+  ~0.6 for a forager re-deciding every 0.1 s). A policy that re-decides every env step diverges far more
+  (paths differ by tens of units at `dt <= 0.02`) because it reacts at different simulated times.
+- **Decision interval for training (open):** following the above, give the agent a fixed decision interval
+  in seconds (action repeat / frame skip, e.g. `decision_dt = 0.1`) rather than one decision per env step,
+  so that learned behaviour does not depend on `dt`.
 
 ## Known pitfalls
+
+- `Arena.spawn_food` with `n_food = 0` raised (the attempt loop ran 0 times and fell through to the
+  error); fixed with an early return, so food-free envs (`ZebrafishEnv(n_food=0)`) work.
 
 - **Orbiting:** with any forward speed while turning hard, the turning radius (v / omega) can equal
   the distance to a nearby pellet, so the agent circles it with the pellet stuck outside the mouth

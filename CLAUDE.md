@@ -18,7 +18,7 @@ the design decisions (with reasons), open questions and the next step.
 | `arena.py` | `Arena`: walls, food as an `(N, 2)` array, `spawn_food`, `remove_food`, `draw` |
 | `env.py` | `ZebrafishEnv(gymnasium.Env)`: combines the modules above; step order is eat -> move -> glucose -> reward -> end |
 | `test_*.py` | pytest suites, one per module |
-| `plot_*.py`, `animate_*.py`, `compare_steering.py` | Visual checks; write to `figures/` (gitignored) |
+| `plot_*.py`, `animate_*.py`, `compare_*.py` | Visual checks; write to `figures/` (gitignored) |
 
 ## Conventions
 
