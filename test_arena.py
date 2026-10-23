@@ -27,6 +27,13 @@ def test_spawns_n_food():
     assert arena.num_food == 25
 
 
+def test_spawn_zero_food():
+    arena = Arena(seed=0, n_food=0)
+    arena.spawn_food(avoid=START)
+    assert arena.food_positions.shape == (0, 2)
+    assert arena.num_food == 0
+
+
 def test_food_respects_wall_margin():
     arena = make_arena(n_food=500, food_wall_margin=5.0)
     x, y = arena.food_positions.T

@@ -65,6 +65,8 @@ class Arena:
         """
         max_attempts = 1000 * self.n_food
         self.food_positions = np.zeros((0, 2))
+        if self.n_food <= 0:
+            return                                  # nothing to place (the loop below would run 0 times and raise)
         for _ in range(max_attempts):
             if len(self.food_positions) >= self.n_food:
                 return
