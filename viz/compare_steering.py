@@ -1,6 +1,6 @@
 """
 Compare WaypointFish speed modes on the same rectangle, with the same noise seed.
-Run with: python compare_steering.py  (saves figures/steering_compare.png and .mp4)
+Run with: python viz/compare_steering.py  (saves figures/steering_compare.png and .mp4)
 
 Each variant changes one thing relative to the default ("coupled", arrive_radius=4):
  - speed_mode="cruise": keeps >= 30% speed through turns instead of pivoting
@@ -14,9 +14,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FFMpegWriter, FuncAnimation
 
-from animate_movement import (AGENT, DT, FPS, N_STEPS, RECTANGLE_CORNERS, SURFACE, TEXT, TEXT_MUTED,
-                              AgentPanel, WaypointFish, rollout)
-from arena import Arena
+from viz.animate_movement import (AGENT, DT, FPS, N_STEPS, RECTANGLE_CORNERS, SURFACE, TEXT, TEXT_MUTED,
+                                  AgentPanel, WaypointFish, rollout)
+from viz.style import FIGURES_DIR
+from zfo.arena import Arena
 
 SEED = 1
 VARIANTS = [
@@ -84,7 +85,7 @@ def plot_static(runs):
     fig.suptitle(f"WaypointFish steering variants, {N_STEPS} steps, same noise (seed {SEED}); dashed = target rectangle",
                  fontsize=11, color=TEXT, x=0.02, ha="left")
     fig.tight_layout()
-    out = os.path.join("figures", "steering_compare.png")
+    out = os.path.join(FIGURES_DIR, "steering_compare.png")
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     print(f"saved {out}")
 
@@ -99,14 +100,14 @@ def animate(arena, runs):
         return [artist for panel in panels for artist in panel.update(t)]
 
     anim = FuncAnimation(fig, update, frames=N_STEPS + 1, blit=True)
-    out = os.path.join("figures", "steering_compare.mp4")
+    out = os.path.join(FIGURES_DIR, "steering_compare.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=120, savefig_kwargs={"facecolor": SURFACE})
     print(f"saved {out}")
 
 
 def main():
     arena = Arena(size=(100.0, 100.0))
-    os.makedirs("figures", exist_ok=True)
+    os.makedirs(FIGURES_DIR, exist_ok=True)
     runs = run_variants(arena)
     plot_static(runs)
     animate(arena, runs)

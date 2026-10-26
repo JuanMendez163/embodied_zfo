@@ -4,7 +4,7 @@ Sanity checks for the food in arena.py. Run with: pytest test_arena.py
 
 import numpy as np
 
-from arena import Arena
+from zfo.arena import Arena
 
 START = np.array([50.0, 50.0])
 

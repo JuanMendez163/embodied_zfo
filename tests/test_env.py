@@ -7,7 +7,7 @@ import math
 import numpy as np
 from gymnasium.utils.env_checker import check_env
 
-from env import ZebrafishEnv
+from zfo.env import ZebrafishEnv
 
 IDLE = [0.0, 0.0, 0.0]
 EAT = [0.0, 0.0, 1.0]

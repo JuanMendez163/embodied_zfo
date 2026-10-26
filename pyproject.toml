@@ -1,0 +1,17 @@
+# Makes the repo's packages importable from anywhere (zfo, training, viz) via an editable install,
+# done by environment.yml's pip section. Dependencies are managed by conda in environment.yml.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embodied_zfo"
+version = "0.1.0"
+description = "Continuous homeostatic foraging environment for a zebrafish-like agent"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+packages = ["zfo", "training", "viz"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,9 +1,9 @@
 """
 Video of a trained PPO agent (runs/NAME/model.zip) in one evaluation episode: the agent in the arena
 (left), its glucose trace (right, top) and its commands (right, bottom).
-Run with: python animate_ppo.py [--name ppo] [--seed 10000]  (saves figures/ppo_NAME_seedSEED.mp4)
+Run with: python viz/animate_ppo.py [--name ppo] [--seed 10000]  (saves figures/ppo_NAME_seedSEED.mp4)
 
-The episode is the same one train_ppo.evaluate runs for that seed (make_ppo_env, deterministic
+The episode is the same one training.metrics.evaluate runs for that seed (make_ppo_env, deterministic
 actions), and its episode_metrics are printed. The policy only sees the observation; env state is
 read for drawing only. The mouth cone is drawn darker while EAT is held and flashes on a successful eat.
 """
@@ -19,10 +19,12 @@ from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Wedge
 from stable_baselines3 import PPO
 
-from animate_env import AGENT, EAT_MARK, FOOD, SURFACE, TEXT, TEXT_MUTED, TRAIL, TURN, style_trace
-from train_ppo import EVAL_SEED, episode_metrics, make_ppo_env
+from training.metrics import EVAL_SEED, episode_metrics
+from training.train_ppo import RUNS_DIR, make_ppo_env
+from viz.style import AGENT, EAT_MARK, FIGURES_DIR, FOOD, SURFACE, TEXT, TEXT_MUTED, TURN, style_trace
 
 FPS = 30              # 3x real time at dt = 0.1
+TRAIL = 50            # past steps shown behind the agent
 CONE_ALPHA = {"idle": 0.12, "held": 0.35, "eaten": 0.8}
 
 
@@ -51,7 +53,7 @@ def simulate(model, seed):
 
 
 def main(name, seed):
-    model = PPO.load(os.path.join("runs", name, "model"), device="cpu")
+    model = PPO.load(os.path.join(RUNS_DIR, name, "model"), device="cpu")
     env, frames, infos = simulate(model, seed)
     metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown)
     duration = env.max_steps * env.dt
@@ -88,8 +90,7 @@ def main(name, seed):
 
     # --- glucose trace ---
     ax_g = fig.add_subplot(grid[0, 1])
-    style_trace(ax_g)
-    ax_g.set_xlim(0, duration)
+    style_trace(ax_g, duration)
     ax_g.set_ylim(0, env.glucose_max)
     ax_g.axhline(env.glucose_target, color=TEXT_MUTED, linestyle="--", linewidth=1)
     ax_g.text(duration, env.glucose_target, " target", va="center", fontsize=8, color=TEXT_MUTED)
@@ -104,8 +105,7 @@ def main(name, seed):
 
     # --- command trace ---
     ax_c = fig.add_subplot(grid[1, 1], sharex=ax_g)
-    style_trace(ax_c)
-    ax_c.set_xlim(0, duration)
+    style_trace(ax_c, duration)
     ax_c.set_ylim(-0.05, 1.15)
     ax_c.set_xlabel("time (s)", fontsize=9, color=TEXT_MUTED)
     ax_c.set_ylabel("command", fontsize=9, color=TEXT_MUTED)
@@ -156,8 +156,8 @@ def main(name, seed):
                 eat_line, cursor_g, cursor_c)
 
     anim = FuncAnimation(fig, update, frames=len(frames), blit=True)
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", f"ppo_{name}_seed{seed}.mp4")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=110, savefig_kwargs={"facecolor": SURFACE})
     print(f"saved {out}: {len(frames) - 1} steps")
     print("  " + ", ".join(f"{k}={v:.3f}" for k, v in metrics.items()))

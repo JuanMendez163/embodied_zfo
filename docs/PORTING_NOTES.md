@@ -9,16 +9,19 @@ _Last updated: 2026-10-26_
 
 | Step | State | Where |
 |---|---|---|
-| 1. Movement | Done | `movement.py`, `test_movement.py`, `plot_movement.py`, `animate_movement.py`, `compare_steering.py` |
-| 2a. Food placement | Done | `arena.py`, `test_arena.py`, `plot_food.py` |
-| 2b. Eating rule | Done | `feeding.py`, `test_feeding.py`, `animate_feeding.py` |
-| 3a. Glucose dynamics (was 2c) | Done | `metabolism.py`, `test_metabolism.py` |
-| 3b.1 Gymnasium env dynamics | Done | `env.py`, `test_env.py`, `animate_env.py` |
-| 3b.2 Observation, option A (nearest k) | Done | `sensing.py`, `test_sensing.py`, `env.py` (`obs_mode="nearest"`) |
-| 3c. Pre-training fixes, first PPO run | Done | `env.py`, `train_ppo.py`, `runs/ppo/` (gitignored) |
-| **3d. Inspect the trained agent, make the task harder** | **Next** | |
+| 1. Movement | Done | `zfo/movement.py`, `tests/test_movement.py`, `viz/plot_movement.py`, `viz/animate_movement.py`, `viz/compare_steering.py` |
+| 2a. Food placement | Done | `zfo/arena.py`, `tests/test_arena.py`, `viz/plot_food.py` |
+| 2b. Eating rule | Done | `zfo/feeding.py`, `tests/test_feeding.py`, `viz/animate_feeding.py` |
+| 3a. Glucose dynamics (was 2c) | Done | `zfo/metabolism.py`, `tests/test_metabolism.py` |
+| 3b.1 Gymnasium env dynamics | Done | `zfo/env.py`, `tests/test_env.py`, `viz/animate_env.py` |
+| 3b.2 Observation, option A (nearest k) | Done | `zfo/sensing.py`, `tests/test_sensing.py`, `zfo/env.py` (`obs_mode="nearest"`) |
+| 3c. Pre-training fixes, first PPO run | Done | `zfo/env.py`, `training/train_ppo.py`, `runs/ppo/` (gitignored) |
+| 3d.1 Inspect the trained agent | Done | `viz/animate_ppo.py` |
+| Repo reorganized into packages | Done | `zfo/`, `training/`, `viz/`, `tests/`, `pyproject.toml` |
+| **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-77 tests pass (`pytest -q`).
+80 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is not committed yet.
 
 ## First PPO run (2026-10-26)
 
@@ -41,34 +44,22 @@ _Last updated: 2026-10-26_
   for the orbiting pitfall.
 - Healthy PPO stats: explained variance ~0.95-0.97, clip fraction 0.05-0.13, approx KL ~0.006.
 - Single seed and 30 episodes: not yet a robust comparison.
-- **Behaviour** (`animate_ppo.py`, eval seed 10000, start glucose 26): hunger-gated foraging. When
+- **Behaviour** (`viz/animate_ppo.py`, eval seed 10000, start glucose 26): hunger-gated foraging. When
   glucose falls to ~45 it **pivots in place** (|turn| = 1, move = 0), then **dashes straight** (move ~1,
   turn ~0) with EAT held, eats, then **rests** (move -> 0) with a slow drift in turn while glucose
   decays. So the extra |turn| is pivots plus idle drift, not orbiting: it found the pivot-then-move
-  strategy that `forage_action` needed hand-coded. EAT is gated by hunger (held during approaches, off
+  strategy that `zfo.policies.forage_action` needed hand-coded. EAT is gated by hunger (held during approaches, off
   while resting), not by reach. Occasional double eats overshoot to ~65. Ate all 20 pellets; the arena
   was empty by ~111 s.
 
-## Next step: 3d. inspect the trained agent, make the task harder
+## Next step: 3d.2 make the task harder
 
-1. ~~Animate the trained policy~~ done: `animate_ppo.py` (see Behaviour above).
-2. Remove the food ceiling: respawning food and/or longer episodes.
-3. Then harder sensing: limited `sensing_range`, `n_nearest` > 1.
-4. Several seeds per configuration.
-
-### Pre-training fixes (done)
-
-Before the first training run (see "Open questions" for why):
-1. ~~Reward scale~~ done (`reward_scale`, see decisions).
-2. **Discount from a horizon in seconds:** `gamma = exp(-dt / tau)`, tau ~ 30 s (gamma ~ 0.997 at
-   dt = 0.1). The default 0.99 is a 10 s horizon at dt = 0.1, shorter than the glucose half-life.
-3. ~~Randomize `glucose_start`~~ done: `glucose_start=(low, high)` samples uniformly at each reset.
-   Default stays at the target (tests and animations rely on it); `train_ppo.py` should pass e.g. (20, 80).
-4. `stable-baselines3` (2.9) and `pytorch` (2.14, MPS available) are in `environment.yml`; a tiny
-   PPO run works. `train_ppo.py` written (RescaleAction to [-1, 1], gamma from tau = 30 s,
-   glucose_start (20, 80), 8 envs x 1024 steps). **Next: first 1M-step run** and compare
-   against a random policy (starves in ~64 s on average) and `scripted_action` in `animate_env.py`
-   (metrics: time near target, pellets eaten, starvation rate).
+1. **Remove the food ceiling** (first): respawn eaten pellets (wef has regrowth) and/or lengthen
+   episodes, so `total_eaten` and the target error can separate policies again. Re-run
+   `training/train_ppo.py` and compare with the first run.
+2. Harder sensing: limited `sensing_range`, `n_nearest` > 1.
+3. Several seeds per configuration before trusting small differences.
+4. Optional: a small cost per EAT attempt, if precise eating (tapping) should emerge.
 
 Sector sensors (option B, wef style) remain an alternative `obs_mode`: S angular sectors, each
 reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_sensors` in
@@ -120,8 +111,27 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   flatten near-starvation rewards.
 - **First-order movement** (commands set velocities directly), turn-then-move within a step (as in
   wef). Walls clip each axis (agent slides). Second-order dynamics (momentum, drag) not ported yet.
+- **Training setup** (`training/train_ppo.py`, SB3 PPO, MlpPolicy defaults: separate 64x64 tanh actor/critic):
+  - **gamma = exp(-dt / tau), tau = 30 s** (~0.9967 at dt = 0.1), so the planning horizon is in
+    seconds; SB3's default 0.99 is a 10 s horizon at dt = 0.1, shorter than the glucose half-life.
+  - **Actions rescaled to [-1, 1]** with `RescaleAction` in `make_ppo_env`, used for both training and
+    evaluation (one place for the translation). PPO's Gaussian starts at mean 0, std 1; on the raw
+    [0, 1] move/eat ranges half the samples would clip to move = 0. The env keeps physical units.
+  - **`glucose_start=(20, 80)`** in training and evaluation so the agent also experiences satiety;
+    the env default stays at the target (tests and animations rely on it).
+  - **No VecNormalize:** observations are already in [-1, 1] and the reward is scaled in the env.
+  - 8 envs x `n_steps` 1024 = 8192 transitions per update, minibatch 256, 10 epochs, lambda 0.95,
+    CPU (small MLPs). Evaluation seeds start at 10000, which training never uses.
+- **Package layout** (2026-10-26): `zfo/` (env, pure modules, scripted baselines in `policies.py`),
+  `training/` (`train_ppo.py`, `metrics.py`), `viz/` (visual checks, shared `style.py`), `tests/`.
+  Dependencies point one way (`training`, `viz` -> `zfo`), so the env can be used without SB3 or
+  plotting code. Before this, `train_ppo.py` imported its scripted baseline from a video script.
+  Editable install (`-e .` in `environment.yml`, packages listed in `pyproject.toml`) so imports work
+  from any directory; output dirs (`figures/`, `runs/`) are anchored to the repo root.
+- **Step info for metrics:** `info` reports the applied (clipped) `action`, plus `eat_ready` and
+  `food_in_reach` recorded before eating (= the agent's observed can_eat / in_reach).
 
-- **Evaluation metrics** (`train_ppo.episode_metrics`, shared by the training logs and the final
+- **Evaluation metrics** (`training.metrics.episode_metrics`, shared by the training logs and the final
   random / scripted / PPO table on the same seeded episodes):
   - `glucose_target_error` = mean |g - target| over the **full episode duration**, counting time after
     starvation at error = target. A per-step mean over alive time made starving early look good.
@@ -154,32 +164,35 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
 - **Second-order movement** (`motion_order=2` in wef) not ported.
 - ~~dt-independence check for the full env~~ done (2026-10-26): `forage_action` on the same 10 seeded
   episodes at dt = 0.1, 0.05, 0.02 gives the same metrics within ~1-3% (target error ~3.5, 18.3
-  pellets, no starvation). Per-step counts are not dt-independent: EAT success per *step* scales with dt;
-  use eats per second of EAT held, or count attempt bouts.
+  pellets, no starvation). Per-step counts are not dt-independent (EAT success per *step* scaled with
+  dt), hence the bout-based `eat_efficiency`.
 - **Training settings that are per step** (not yet tied to seconds): GAE `lambda` (0.95 ~ a 2 s blend
   at dt = 0.1), `n_steps` (1024 = 102 s per env per rollout), total timesteps, and per-step Gaussian
   exploration noise (averages out faster at smaller dt). Gamma is already set from seconds.
-- **Food runs out:** the scripted forager eats ~18-19 of 20 pellets in 120 s, so `total_eaten` hits a
-  ceiling and food may limit performance. Consider respawning (wef has regrowth) before longer episodes.
+- **Food runs out:** the scripted forager eats ~18-19 of 20 pellets in 120 s and PPO up to all 20, so
+  `total_eaten` hits a ceiling and food limits performance (next step).
+- **EAT is free:** failed attempts cost nothing, so PPO holds EAT whenever hungry (~46% of the time).
+  A small per-attempt cost, or restarting the cooldown on failed attempts, would reward precision.
 
 - **k > 1 and a limited sensing range:** try after the first training run. With k = 1 the
   "nearest" pellet can switch between steps when two are equidistant (dithering).
   With a limited range, food out of sight may call for a recurrent policy (memory).
 
-- **Action range for PPO:** SB3's checker warns that the action space is not symmetric [-1, 1].
-  PPO's Gaussian starts centered at 0 with std 1, so with move/eat in [0, 1] about half the sampled
-  `move_cmd`s clip to 0 and only ~31% of samples exceed the EAT threshold of 0.5. Options: a wrapper
-  that maps [-1, 1] to the env's ranges, or change the env's action space itself.
+- SB3's `check_env` still warns that the env's action space is not symmetric [-1, 1]; expected,
+  since the rescale lives in `make_ppo_env` (see Training setup).
 
 ## Known pitfalls
 
 - **Orbiting:** with any forward speed while turning hard, the turning radius (v / omega) can equal
   the distance to a nearby pellet, so the agent circles it with the pellet stuck outside the mouth
   cone and starves. Scripted policies must pivot in place (move = 0) when a nearby pellet is outside
-  the cone (see `scripted_action` in `animate_env.py`). Expect RL agents to hit this early.
+  the cone (see `forage_action` in `zfo/policies.py`). The first PPO agent learned to pivot in place
+  by itself (see Behaviour), but watch for this when changing movement or sensing.
 - `food_positions` is a numpy array: remove pellets with `Arena.remove_food(indices)` (all at once),
   never `del` or one-at-a-time removal.
 - Use numpy (not `math`) in anything that may receive arrays; `wrap_angle` was switched to numpy for this.
 - `ZebrafishEnv.can_eat` uses a 1e-9 tolerance so float sums of `dt` do not add an extra cooldown step.
+- Gymnasium 1.x wrappers do not forward attributes: on a `RescaleAction`-wrapped env use
+  `env.unwrapped.dt` etc. (`info` passes through unchanged).
 - `WaypointFish` (in `animate_movement.py`): its `noise` parameter's effective std is
   `noise / sqrt(1 - smoothing^2)` (~0.34 for the defaults), not `noise`.

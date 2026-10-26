@@ -27,13 +27,13 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from arena import Arena
-from feeding import nearest_food_in_reach
-from metabolism import (GLUCOSE_HALF_LIFE, GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, MOVE_COST_EXPONENT,
+from zfo.arena import Arena
+from zfo.feeding import nearest_food_in_reach
+from zfo.metabolism import (GLUCOSE_HALF_LIFE, GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, MOVE_COST_EXPONENT,
                         MOVE_COST_RATE, STARVATION_THRESHOLD, TURN_COST_RATE, decay_rate_from_half_life,
                         drive, drive_reward, update_glucose)
-from movement import step_pose
-from sensing import nearest_food_observation
+from zfo.movement import step_pose
+from zfo.sensing import nearest_food_observation
 
 EAT_COOLDOWN = 0.5    # s; minimum time between successful eats (handling time; placeholder)
 EAT_THRESHOLD = 0.5   # eat_cmd above this counts as choosing EAT

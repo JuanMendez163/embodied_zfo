@@ -1,7 +1,7 @@
 """
 Video sanity check for feeding.py: a scripted forager swims to food and eats it with an explicit
 EAT action, with its mouth cone drawn.
-Run with: python animate_feeding.py  (saves figures/feeding.mp4)
+Run with: python viz/animate_feeding.py  (saves figures/feeding.mp4)
 
 The forager is a stand-in for the future RL policy: each step it steers toward the nearest
 pellet and chooses EAT whenever a pellet is in its mouth cone. Within a step it eats first (at
@@ -22,9 +22,10 @@ from matplotlib.animation import FFMpegWriter, FuncAnimation
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Wedge
 
-from arena import Arena
-from feeding import food_in_reach, nearest_food_in_reach
-from movement import step_pose, wrap_angle
+from viz.style import FIGURES_DIR
+from zfo.arena import Arena
+from zfo.feeding import food_in_reach, nearest_food_in_reach
+from zfo.movement import step_pose, wrap_angle
 
 ARENA_SIZE = (50.0, 50.0)
 N_FOOD = 15
@@ -181,8 +182,8 @@ def main():
         return food, trail, reach, cone, body, heading_line, readout
 
     anim = FuncAnimation(fig, update, frames=len(frames), blit=True)
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", "feeding.mp4")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, "feeding.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=130, savefig_kwargs={"facecolor": SURFACE})
     print(f"saved {out}: ate {frames[-1]['eaten_total']}/{N_FOOD} pellets in {N_STEPS} steps")
 

@@ -6,8 +6,8 @@ import math
 
 import numpy as np
 
-from feeding import food_in_reach
-from sensing import FOOD_FEATURES, egocentric_bearing, nearest_food_observation
+from zfo.feeding import food_in_reach
+from zfo.sensing import FOOD_FEATURES, egocentric_bearing, nearest_food_observation
 
 AGENT = np.array([50.0, 50.0])
 EAT_RADIUS = 2.0

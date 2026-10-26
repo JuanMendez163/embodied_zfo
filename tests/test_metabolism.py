@@ -4,7 +4,7 @@ Sanity checks for metabolism.py. Run with: pytest test_metabolism.py
 
 import math
 
-from metabolism import (GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, STARVATION_THRESHOLD, basal_decay,
+from zfo.metabolism import (GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, STARVATION_THRESHOLD, basal_decay,
                         decay_rate_from_half_life, drive, drive_reward, movement_cost, update_glucose)
 
 K = decay_rate_from_half_life(30.0)

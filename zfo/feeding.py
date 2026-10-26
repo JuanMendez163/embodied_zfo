@@ -12,7 +12,7 @@ food positions as arguments and do not change anything.
 
 import numpy as np
 
-from movement import wrap_angle
+from zfo.movement import wrap_angle
 
 
 def food_in_reach(position, heading, food_positions, eat_radius, mouth_angle=None):

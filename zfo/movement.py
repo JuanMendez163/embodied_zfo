@@ -18,8 +18,6 @@ Conventions:
    explicit rather than pre-multiplied into the rates as wef's cfg.py does
 """
 
-import math
-
 import numpy as np
 
 

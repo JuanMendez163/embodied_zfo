@@ -1,7 +1,7 @@
 """
 Video check of ZebrafishEnv's glucose dynamics: the agent moves in the arena (left) while a live
 glucose trace (right, top) and its commands (right, bottom) update.
-Run with: python animate_env.py  (saves figures/env_glucose.mp4)
+Run with: python viz/animate_env.py  (saves figures/env_glucose.mp4)
 
 A scripted policy runs through phases, shaded on the traces:
  - rest:    move 0                          -> basal decay only
@@ -23,8 +23,10 @@ from matplotlib.animation import FFMpegWriter, FuncAnimation
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Circle, Wedge
 
-from env import ZebrafishEnv
-from movement import wrap_angle
+from viz.style import (AGENT, EAT_MARK, FIGURES_DIR, FOOD, SURFACE, TEXT, TEXT_MUTED, TURN,
+                       style_trace)
+from zfo.env import ZebrafishEnv
+from zfo.policies import forage_action
 
 PHASES = [("rest", 0.0, 8.0), ("cruise", 8.0, 16.0), ("sprint", 16.0, 24.0), ("forage", 24.0, 70.0)]
 DURATION = PHASES[-1][2]
@@ -32,14 +34,6 @@ FPS = 30              # 3x real time at dt = 0.1
 TRAIL = 50
 SEED = 2
 
-SURFACE = "#fcfcfb"
-TEXT = "#0b0b0b"
-TEXT_MUTED = "#52514e"
-GRID = "#e4e3df"
-AGENT = "#2a78d6"
-FOOD = "#1baf7a"
-TURN = "#eb6834"
-EAT_MARK = "#008300"
 PHASE_SHADES = ["#f1f0ec", "#fcfcfb", "#f1f0ec", "#fcfcfb"]
 
 
@@ -62,28 +56,6 @@ def scripted_action(env, t):
     if phase == "sprint":
         return [1.0, 0.15, 0.0]
     return forage_action(env)
-
-
-def forage_action(env):
-    """
-    Hunger-gated foraging: steer to the nearest pellet and EAT while below the glucose target,
-    otherwise cruise slowly and ignore food. Also the scripted baseline in train_ppo.py.
-    """
-    hungry = env.glucose < env.glucose_target
-    food = env.arena.food_positions
-    if not hungry or len(food) == 0:
-        return [0.3, 0.1, 0.0]                      # sated: slow cruise, ignore food
-    offsets = food - env.position
-    distances = np.linalg.norm(offsets, axis=1)
-    target = offsets[np.argmin(distances)]
-    heading_error = wrap_angle(math.atan2(target[1], target[0]) - env.heading)
-    turn_cmd = float(np.clip(heading_error / (math.pi / 2), -1.0, 1.0))
-    move_cmd = 1.0 - abs(turn_cmd)
-    # pivot in place when a nearby pellet is outside the mouth cone: any forward speed there makes the
-    # agent orbit the pellet (turning radius ~ distance to it), keeping it beside the mouth forever
-    if distances.min() < 2 * env.eat_radius and abs(heading_error) > env.mouth_angle / 2:
-        move_cmd = 0.0
-    return [move_cmd, turn_cmd, 1.0]                # hungry: try to eat whenever possible
 
 
 def simulate():
@@ -112,17 +84,6 @@ def shade_phases(ax, label=False):
         if label:
             ax.text((start + end) / 2, 1.02, name, transform=ax.get_xaxis_transform(), ha="center",
                     fontsize=9, color=TEXT_MUTED)
-
-
-def style_trace(ax):
-    ax.set_facecolor(SURFACE)
-    ax.set_xlim(0, DURATION)
-    ax.grid(axis="y", color=GRID, linewidth=0.8)
-    ax.tick_params(colors=TEXT_MUTED, labelsize=8)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(TEXT_MUTED)
 
 
 def main():
@@ -159,7 +120,7 @@ def main():
 
     # --- glucose trace ---
     ax_g = fig.add_subplot(grid[0, 1])
-    style_trace(ax_g)
+    style_trace(ax_g, DURATION)
     shade_phases(ax_g, label=True)
     ax_g.set_ylim(0, env.glucose_max * 0.8)
     ax_g.axhline(env.glucose_target, color=TEXT_MUTED, linestyle="--", linewidth=1)
@@ -175,7 +136,7 @@ def main():
 
     # --- command trace ---
     ax_c = fig.add_subplot(grid[1, 1], sharex=ax_g)
-    style_trace(ax_c)
+    style_trace(ax_c, DURATION)
     shade_phases(ax_c)
     ax_c.set_ylim(-0.05, 1.15)
     ax_c.set_xlabel("time (s)", fontsize=9, color=TEXT_MUTED)
@@ -223,8 +184,8 @@ def main():
                 cursor_g, cursor_c)
 
     anim = FuncAnimation(fig, update, frames=len(frames), blit=True)
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", "env_glucose.mp4")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, "env_glucose.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=110, savefig_kwargs={"facecolor": SURFACE})
     print(f"saved {out}: {len(frames) - 1} steps, {len(eat_times)} eats, final glucose {glucose[-1]:.1f}")
 

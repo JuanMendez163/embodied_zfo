@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from feeding import food_in_reach, nearest_food_in_reach
+from zfo.feeding import food_in_reach, nearest_food_in_reach
 
 AGENT = np.array([50.0, 50.0])
 EAT_RADIUS = 2.0

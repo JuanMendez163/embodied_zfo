@@ -1,6 +1,6 @@
 """
 Visual sanity check for food placement in arena.py: spawn food for several seeds and plot it.
-Run with: python plot_food.py  (saves figures/food_check.png)
+Run with: python viz/plot_food.py  (saves figures/food_check.png)
 
 Each seed follows the episode-start order from arena.py: reset -> place agent -> spawn food
 away from the agent. The last two panels pool many seeds to check placement is uniform:
@@ -13,7 +13,8 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from arena import Arena
+from viz.style import FIGURES_DIR
+from zfo.arena import Arena
 
 N_SEEDS = 6
 N_POOLED = 500        # seeds pooled in the last two panels
@@ -104,8 +105,8 @@ def main():
     fig.suptitle("arena.py: food placement across seeds", fontsize=12, color=TEXT, x=0.02, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.95), h_pad=2.5)
 
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", "food_check.png")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, "food_check.png")
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     print(f"saved {out}")
 

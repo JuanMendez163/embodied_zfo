@@ -18,7 +18,7 @@ Intended use at the start of an episode (mirrors GridWorld.reset: agent first, t
 import matplotlib.pyplot as plt
 import numpy as np
 
-from movement import enforce_bounds
+from zfo.movement import enforce_bounds
 
 
 class Arena:

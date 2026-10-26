@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 
-from movement import enforce_bounds, propose_pose, step_pose, wrap_angle
+from zfo.movement import enforce_bounds, propose_pose, step_pose, wrap_angle
 
 ARENA = (100.0, 100.0)
 CENTER = np.array([50.0, 50.0])

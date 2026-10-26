@@ -19,8 +19,8 @@ arguments and do not change anything.
 
 import numpy as np
 
-from feeding import food_in_reach
-from movement import wrap_angle
+from zfo.feeding import food_in_reach
+from zfo.movement import wrap_angle
 
 FOOD_FEATURES = 4   # columns per sensed pellet: proximity, cos(bearing), sin(bearing), in_reach
 

@@ -1,6 +1,6 @@
 """
 Visual sanity checks for movement.py: roll out a few command sequences and plot the trajectories.
-Run with: python plot_movement.py  (saves figures/movement_check.png)
+Run with: python viz/plot_movement.py  (saves figures/movement_check.png)
 """
 
 import math
@@ -9,7 +9,8 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from movement import step_pose
+from viz.style import FIGURES_DIR
+from zfo.movement import step_pose
 
 ARENA = (100.0, 100.0)
 BODY_RADIUS = 1.0
@@ -114,8 +115,8 @@ def main():
                  color=TEXT, x=0.06, ha="left")
     fig.tight_layout()
 
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", "movement_check.png")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, "movement_check.png")
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     print(f"saved {out}")
 

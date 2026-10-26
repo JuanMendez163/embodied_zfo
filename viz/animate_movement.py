@@ -1,6 +1,6 @@
 """
 Video sanity check for movement.py: animate an agent moving inside an Arena.
-Run with: python animate_movement.py  (saves figures/movement.mp4)
+Run with: python viz/animate_movement.py  (saves figures/movement.mp4)
 
 Five scenarios play side by side, one step per frame:
  - circle:        constant move + turn, should loop forever on the same circle
@@ -19,9 +19,10 @@ import numpy as np
 from matplotlib.animation import FFMpegWriter, FuncAnimation
 from matplotlib.collections import LineCollection
 
-from arena import Arena
-from movement import step_pose, wrap_angle
-from plot_movement import smooth_random_commands
+from viz.plot_movement import smooth_random_commands
+from viz.style import FIGURES_DIR
+from zfo.arena import Arena
+from zfo.movement import step_pose, wrap_angle
 
 MAX_SPEED = 10.0     # units/s
 MAX_TURN = math.pi   # rad/s
@@ -239,8 +240,8 @@ def main():
         return [artist for panel in panels for artist in panel.update(t)]
 
     anim = FuncAnimation(fig, update, frames=N_STEPS + 1, blit=True)
-    os.makedirs("figures", exist_ok=True)
-    out = os.path.join("figures", "movement.mp4")
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    out = os.path.join(FIGURES_DIR, "movement.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=120, savefig_kwargs={"facecolor": SURFACE})
     print(f"saved {out}")
 
