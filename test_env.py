@@ -128,6 +128,35 @@ def test_cooldown_is_in_seconds_not_steps():
         assert blocked == steps_blocked
 
 
+def test_glucose_start_range_is_sampled_and_reproducible():
+    env = ZebrafishEnv(glucose_start=(20.0, 80.0))
+    starts = [env.reset(seed=i)[1]["glucose"] for i in range(20)]
+    assert all(20.0 <= g <= 80.0 for g in starts) and len(set(starts)) == 20
+    assert env.reset(seed=3)[1]["glucose"] == starts[3]
+
+
+def test_glucose_start_range_does_not_change_positions():
+    fixed, ranged = ZebrafishEnv(), ZebrafishEnv(glucose_start=(20.0, 80.0))
+    fixed.reset(seed=5)
+    ranged.reset(seed=5)
+    assert np.array_equal(fixed.position, ranged.position)
+    assert np.array_equal(fixed.arena.food_positions, ranged.arena.food_positions)
+
+
+def test_reward_scale_divides_reward():
+    rewards = []
+    for scale in (1.0, 10.0):
+        env = env_with_pellet_ahead(reward_scale=scale)
+        env.glucose = 30.0
+        rewards.append(env.step(EAT)[1])
+    assert math.isclose(rewards[1], rewards[0] / 10.0)
+
+
+def test_default_reward_scale_is_positive():
+    scale = ZebrafishEnv().reward_scale
+    assert np.isfinite(scale) and scale > 0
+
+
 def test_starvation_terminates():
     env = ZebrafishEnv()
     env.reset(seed=0)

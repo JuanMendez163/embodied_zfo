@@ -15,7 +15,7 @@ Within a step, in order:
             eat the nearest one (at the pose the agent observed when it chose to eat)
  2. move:   step_pose with (move_cmd, turn_cmd)
  3. glucose: update_glucose over dt (decay, movement and turning cost, intake)
- 4. reward: drive_reward(glucose before, glucose after), as in the Gutkin paper / GridWorld
+ 4. reward: drive_reward(glucose before, glucose after) / reward_scale, as in the Gutkin paper / GridWorld
  5. end:    terminated when starved (glucose == 0), truncated at the episode time limit
 
 All rates are in seconds; dt only sets how finely time is sampled.
@@ -47,7 +47,9 @@ class ZebrafishEnv(gym.Env):
      - "nearest":  for each of the n_nearest nearest pellets within sensing_range,
                    [proximity, cos(bearing), sin(bearing), in_reach] (see sensing.py); zeros if not sensed
      - "internal": nothing else (a blind baseline)
-    Reward: reduction in drive (distance from glucose_target) over the step.
+    Reward: reduction in drive (distance from glucose_target) over the step, divided by reward_scale.
+    glucose_start: None (start at glucose_target), a number, or a (low, high) range sampled uniformly
+    at every reset.
     """
 
     metadata = {"render_modes": []}
@@ -60,7 +62,7 @@ class ZebrafishEnv(gym.Env):
                  glucose_half_life=GLUCOSE_HALF_LIFE, move_cost_rate=MOVE_COST_RATE,
                  turn_cost_rate=TURN_COST_RATE, move_cost_exponent=MOVE_COST_EXPONENT,
                  intake_amount=INTAKE_AMOUNT, starvation_threshold=STARVATION_THRESHOLD,
-                 drive_n=2, drive_m=1, obs_mode="nearest", n_nearest=1, sensing_range=None, seed=None):
+                 drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None, seed=None):
         super().__init__()
         self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance, seed=seed)
 
@@ -91,6 +93,13 @@ class ZebrafishEnv(gym.Env):
         self.starvation_threshold = starvation_threshold
         self.drive_n = drive_n
         self.drive_m = drive_m
+        # Divides the drive reward so PPO's critic sees returns of order 1; a constant factor does not
+        # change the optimal policy, and keeps the summed reward over a time interval dt-independent.
+        if reward_scale is None:
+            # the drive reduction from one pellet eaten just below the target (target - intake -> target)
+            reward_scale = drive(self.glucose_target - self.intake_amount, self.glucose_target,
+                                 self.drive_n, self.drive_m)
+        self.reward_scale = reward_scale
 
         # observation
         if obs_mode not in ("nearest", "internal"):
@@ -123,7 +132,7 @@ class ZebrafishEnv(gym.Env):
         self.heading = float(self.arena.np_random.uniform(-math.pi, math.pi))
         self.arena.spawn_food(avoid=self.position)
 
-        self.glucose = float(self.glucose_start)
+        self.glucose = self._initial_glucose()          # drawn after food, so positions match a fixed start
         self.time_since_last_eat = self.eat_cooldown    # first eat is allowed immediately
         self.step_count = 0
         self.total_eaten = 0
@@ -152,7 +161,8 @@ class ZebrafishEnv(gym.Env):
         self.time_since_last_eat += self.dt # keeping track of eating cooldown
 
         # 4. reward: reduction in drive (no separate starvation penalty, as in GridWorld)
-        reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n, self.drive_m)
+        reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n,
+                              self.drive_m) / self.reward_scale
 
         # 5. episode end
         self.step_count += 1
@@ -190,6 +200,16 @@ class ZebrafishEnv(gym.Env):
         self.total_eaten += 1
         self.time_since_last_eat = 0.0 # reset cooldown
         return 1
+
+    def _initial_glucose(self):
+        """
+        Glucose at the start of an episode: glucose_start if it is a number, or a uniform draw from it
+        if it is a (low, high) range (so the agent also experiences being hungry or sated).
+        """
+        if np.ndim(self.glucose_start) == 0:
+            return float(self.glucose_start)
+        low, high = self.glucose_start
+        return float(self.arena.np_random.uniform(low, high))
 
     def can_eat(self):
         """

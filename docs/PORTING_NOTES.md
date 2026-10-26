@@ -17,16 +17,16 @@ _Last updated: 2026-10-26_
 | 3b.2 Observation, option A (nearest k) | Done | `sensing.py`, `test_sensing.py`, `env.py` (`obs_mode="nearest"`) |
 | **3c. Pre-training fixes, then PPO** | **Next** | `env.py`, `train_ppo.py` (to write) |
 
-73 tests pass (`pytest -q`).
+77 tests pass (`pytest -q`).
 
 ## Next step: 3c. pre-training fixes, then PPO
 
 Before the first training run (see "Open questions" for why):
-1. **Reward scale:** divide the drive reward by a constant (e.g. `glucose_target**2`) or use SB3's
-   `VecNormalize`; with `drive_n = 2` per-step rewards span ~0.1 to ~100+ (one pellet).
+1. ~~Reward scale~~ done (`reward_scale`, see decisions).
 2. **Discount from a horizon in seconds:** `gamma = exp(-dt / tau)`, tau ~ 30 s (gamma ~ 0.997 at
    dt = 0.1). The default 0.99 is a 10 s horizon at dt = 0.1, shorter than the glucose half-life.
-3. **Randomize `glucose_start`** (e.g. uniform in [20, 80]) so the agent also experiences satiety.
+3. ~~Randomize `glucose_start`~~ done: `glucose_start=(low, high)` samples uniformly at each reset.
+   Default stays at the target (tests and animations rely on it); `train_ppo.py` should pass e.g. (20, 80).
 4. **Add `stable-baselines3` and `pytorch` to `environment.yml`**, write `train_ppo.py`, and compare
    against a random policy (starves in ~64 s on average) and `scripted_action` in `animate_env.py`
    (metrics: time near target, pellets eaten, starvation rate).
@@ -73,6 +73,12 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   - **`sensing_range` defaults to the arena diagonal** (sees everything, closest to GridWorld) so a
     failed first training run is not due to limited sensing. A shorter range is more biological.
   - `obs_mode="internal"` (glucose, can_eat only) is kept as a blind baseline.
+- **Reward scale:** reward = drive reduction / `reward_scale`, default = one pellet's worth
+  (`drive(target - intake, target)` = 100 at the current defaults): eating from 40 to 50 gives +1,
+  near starvation (5 -> 15) +8, starving totals about -25. A positive constant keeps every ratio
+  between rewards (the drive's convexity, `drive_n`, is what makes hungry pellets worth more) and the
+  optimal policy. Avoid reward *clipping* (SB3 `VecNormalize` clips at 10 by default), which would
+  flatten near-starvation rewards.
 - **First-order movement** (commands set velocities directly), turn-then-move within a step (as in
   wef). Walls clip each axis (agent slides). Second-order dynamics (momentum, drag) not ported yet.
 
