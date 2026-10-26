@@ -26,7 +26,31 @@ def env_with_pellet_ahead(**kwargs):
 
 
 def test_passes_gymnasium_checker():
-    check_env(ZebrafishEnv(), skip_render_check=True)
+    for kwargs in [{}, {"obs_mode": "internal"}, {"n_nearest": 3}, {"sensing_range": 20.0}]:
+        check_env(ZebrafishEnv(**kwargs), skip_render_check=True)
+
+
+def test_observation_layout():
+    env = env_with_pellet_ahead()
+    obs = env._get_obs()
+    assert obs.shape == (6,) and env.observation_space.contains(obs)
+    glucose, can_eat, proximity, cos_b, sin_b, in_reach = obs
+    assert math.isclose(glucose, env.glucose_target / env.glucose_max)
+    assert can_eat == 1.0 and in_reach == 1.0
+    assert math.isclose(proximity, 1 - 1 / math.hypot(100.0, 100.0), rel_tol=1e-6)
+    assert math.isclose(cos_b, 1.0) and abs(sin_b) < 1e-6
+
+
+def test_observation_after_eating_last_pellet_senses_nothing():
+    env = env_with_pellet_ahead()
+    obs = env.step(EAT)[0]
+    assert obs[1] == 0.0                   # cooling down
+    assert not obs[2:].any()               # no food left -> nothing detected
+
+
+def test_internal_obs_mode_is_blind():
+    env = ZebrafishEnv(obs_mode="internal")
+    assert env.reset(seed=0)[0].shape == (2,)
 
 
 def test_reset_is_reproducible():
