@@ -61,7 +61,14 @@ def scripted_action(env, t):
         return [0.5, 0.15, 0.0]
     if phase == "sprint":
         return [1.0, 0.15, 0.0]
+    return forage_action(env)
 
+
+def forage_action(env):
+    """
+    Hunger-gated foraging: steer to the nearest pellet and EAT while below the glucose target,
+    otherwise cruise slowly and ignore food. Also the scripted baseline in train_ppo.py.
+    """
     hungry = env.glucose < env.glucose_target
     food = env.arena.food_positions
     if not hungry or len(food) == 0:

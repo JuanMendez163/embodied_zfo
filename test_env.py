@@ -86,12 +86,35 @@ def test_actions_are_clipped():
     assert math.isclose(np.linalg.norm(env.position - start), env.max_speed * env.dt)
 
 
+def test_info_reports_applied_action():
+    env = ZebrafishEnv()
+    env.reset(seed=0)
+    info = env.step([5.0, -0.3, 0.7])[4]
+    assert np.allclose(info["action"], [1.0, -0.3, 0.7])   # move_cmd clipped to 1
+
+
 def test_eat_with_pellet_in_mouth():
     env = env_with_pellet_ahead()
     _, reward, _, _, info = env.step(EAT)
     assert info["n_eaten"] == 1 and info["total_eaten"] == 1 and info["food_left"] == 0
     assert info["glucose"] > env.glucose_target
     assert not env.can_eat()
+
+
+def test_info_reports_eat_conditions_before_eating():
+    env = env_with_pellet_ahead()
+    env.arena.food_positions = np.array([[51.0, 50.0], [51.5, 50.0]])
+    info = env.step(EAT)[4]
+    assert info["eat_ready"] and info["food_in_reach"] and info["n_eaten"] == 1
+    info = env.step(EAT)[4]                # second pellet still in reach, but cooling down
+    assert not info["eat_ready"] and info["food_in_reach"] and info["n_eaten"] == 0
+
+
+def test_info_food_in_reach_follows_mouth_cone():
+    env = env_with_pellet_ahead()
+    env.heading = math.pi                  # pellet now behind
+    info = env.step(IDLE)[4]
+    assert info["eat_ready"] and not info["food_in_reach"]
 
 
 def test_eat_cmd_below_threshold_does_not_eat():

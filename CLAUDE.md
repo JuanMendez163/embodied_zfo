@@ -15,10 +15,12 @@ the design decisions (with reasons), open questions and the next step.
 | `movement.py` | Pure functions: `wrap_angle`, `propose_pose` (first-order kinematics), `enforce_bounds`, `step_pose` |
 | `feeding.py` | Pure functions: `food_in_reach`, `nearest_food_in_reach` (eat radius + mouth cone) |
 | `metabolism.py` | Pure functions: glucose dynamics (`basal_decay`, `movement_cost`, `update_glucose`), `drive`, `drive_reward`; placeholder rate constants at the top |
+| `sensing.py` | Pure functions: `egocentric_bearing`, `nearest_food_observation` (k nearest pellets as proximity, cos/sin bearing, in_reach) |
 | `arena.py` | `Arena`: walls, food as an `(N, 2)` array, `spawn_food`, `remove_food`, `draw` |
 | `env.py` | `ZebrafishEnv(gymnasium.Env)`: combines the modules above; step order is eat -> move -> glucose -> reward -> end |
+| `train_ppo.py` | SB3 PPO training (`make_ppo_env` = RescaleAction to [-1, 1]), `episode_metrics`, and the random / scripted / PPO evaluation; writes `runs/NAME/` (gitignored) |
 | `test_*.py` | pytest suites, one per module |
-| `plot_*.py`, `animate_*.py`, `compare_steering.py` | Visual checks; write to `figures/` (gitignored) |
+| `plot_*.py`, `animate_*.py`, `compare_steering.py` | Visual checks; write to `figures/` (gitignored). `animate_ppo.py` replays a trained model on an evaluation episode |
 
 ## Conventions
 

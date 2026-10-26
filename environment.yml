@@ -8,3 +8,5 @@ dependencies:
   - pytest
   - ffmpeg
   - gymnasium
+  - pytorch
+  - stable-baselines3

@@ -144,6 +144,10 @@ class ZebrafishEnv(gym.Env):
         glucose_before = self.glucose
 
         # 1. eat, at the current (observed) pose
+        # what the agent observed when it chose this action (can_eat, in_reach), recorded before eating
+        eat_ready = self.can_eat()
+        food_in_reach = nearest_food_in_reach(
+            self.position, self.heading, self.arena.food_positions, self.eat_radius, self.mouth_angle) is not None
         n_eaten = self._try_eat(eat_cmd)
 
         # 2. move
@@ -171,7 +175,10 @@ class ZebrafishEnv(gym.Env):
 
         info = self._get_info()
         info.update({
+            "action": action,                       # (move_cmd, turn_cmd, eat_cmd) as applied, after clipping
             "eat_attempted": eat_cmd > EAT_THRESHOLD,
+            "eat_ready": eat_ready,                 # cooldown had passed at the start of the step
+            "food_in_reach": food_in_reach,         # a pellet was in the mouth cone at the start of the step
             "n_eaten": n_eaten,
             "hit_wall": hit_wall,
             "end_reason": "starved" if terminated else "time limit" if truncated else None,

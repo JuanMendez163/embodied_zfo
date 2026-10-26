@@ -15,11 +15,48 @@ _Last updated: 2026-10-26_
 | 3a. Glucose dynamics (was 2c) | Done | `metabolism.py`, `test_metabolism.py` |
 | 3b.1 Gymnasium env dynamics | Done | `env.py`, `test_env.py`, `animate_env.py` |
 | 3b.2 Observation, option A (nearest k) | Done | `sensing.py`, `test_sensing.py`, `env.py` (`obs_mode="nearest"`) |
-| **3c. Pre-training fixes, then PPO** | **Next** | `env.py`, `train_ppo.py` (to write) |
+| 3c. Pre-training fixes, first PPO run | Done | `env.py`, `train_ppo.py`, `runs/ppo/` (gitignored) |
+| **3d. Inspect the trained agent, make the task harder** | **Next** | |
 
 77 tests pass (`pytest -q`).
 
-## Next step: 3c. pre-training fixes, then PPO
+## First PPO run (2026-10-26)
+
+1M steps (123 updates, ~3 min at ~6300 steps/s), seed 0, defaults in `train_ppo.py`. Evaluation on
+30 seeded episodes (deterministic PPO actions):
+
+| policy | starved | target error | eaten | move | abs turn | EAT rate | EAT eff. | out of reach |
+|---|---|---|---|---|---|---|---|---|
+| random | 1.00 | 41.2 | 0.4 | 0.51 | 0.50 | 0.50 | 0.003 | 1.00 |
+| scripted (sees env state) | 0.00 | 3.7 | 17.9 | 0.46 | 0.15 | 0.35 | 0.20 | 0.96 |
+| PPO | 0.00 | 3.7 | 18.4 | 0.34 | 0.39 | 0.46 | 0.16 | 0.97 |
+
+- Learns fast: no starvation in training after ~57k steps; training error 43 -> ~6 by ~500k, then flat.
+  Training error (sampled actions) stays above evaluation (mean actions) because std stays ~0.8.
+- Matches the scripted forager on homeostasis. 3.7 is probably near the floor: each pellet gives a
+  +10 sawtooth (mean abs error ~2.5 even if perfect), plus the transient from glucose_start in [20, 80].
+- **Food ceiling:** training episodes eat ~19.5 of 20 pellets, so food availability limits both policies.
+- **EAT not precise:** holds EAT ~46% of the time, 97% of it out of reach; expected while EAT is free.
+- Swims slower but turns more than the scripted forager (abs turn 0.39 vs 0.15); worth watching
+  for the orbiting pitfall.
+- Healthy PPO stats: explained variance ~0.95-0.97, clip fraction 0.05-0.13, approx KL ~0.006.
+- Single seed and 30 episodes: not yet a robust comparison.
+- **Behaviour** (`animate_ppo.py`, eval seed 10000, start glucose 26): hunger-gated foraging. When
+  glucose falls to ~45 it **pivots in place** (|turn| = 1, move = 0), then **dashes straight** (move ~1,
+  turn ~0) with EAT held, eats, then **rests** (move -> 0) with a slow drift in turn while glucose
+  decays. So the extra |turn| is pivots plus idle drift, not orbiting: it found the pivot-then-move
+  strategy that `forage_action` needed hand-coded. EAT is gated by hunger (held during approaches, off
+  while resting), not by reach. Occasional double eats overshoot to ~65. Ate all 20 pellets; the arena
+  was empty by ~111 s.
+
+## Next step: 3d. inspect the trained agent, make the task harder
+
+1. ~~Animate the trained policy~~ done: `animate_ppo.py` (see Behaviour above).
+2. Remove the food ceiling: respawning food and/or longer episodes.
+3. Then harder sensing: limited `sensing_range`, `n_nearest` > 1.
+4. Several seeds per configuration.
+
+### Pre-training fixes (done)
 
 Before the first training run (see "Open questions" for why):
 1. ~~Reward scale~~ done (`reward_scale`, see decisions).
@@ -27,7 +64,9 @@ Before the first training run (see "Open questions" for why):
    dt = 0.1). The default 0.99 is a 10 s horizon at dt = 0.1, shorter than the glucose half-life.
 3. ~~Randomize `glucose_start`~~ done: `glucose_start=(low, high)` samples uniformly at each reset.
    Default stays at the target (tests and animations rely on it); `train_ppo.py` should pass e.g. (20, 80).
-4. **Add `stable-baselines3` and `pytorch` to `environment.yml`**, write `train_ppo.py`, and compare
+4. `stable-baselines3` (2.9) and `pytorch` (2.14, MPS available) are in `environment.yml`; a tiny
+   PPO run works. `train_ppo.py` written (RescaleAction to [-1, 1], gamma from tau = 30 s,
+   glucose_start (20, 80), 8 envs x 1024 steps). **Next: first 1M-step run** and compare
    against a random policy (starves in ~64 s on average) and `scripted_action` in `animate_env.py`
    (metrics: time near target, pellets eaten, starvation rate).
 
@@ -82,6 +121,26 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
 - **First-order movement** (commands set velocities directly), turn-then-move within a step (as in
   wef). Walls clip each axis (agent slides). Second-order dynamics (momentum, drag) not ported yet.
 
+- **Evaluation metrics** (`train_ppo.episode_metrics`, shared by the training logs and the final
+  random / scripted / PPO table on the same seeded episodes):
+  - `glucose_target_error` = mean |g - target| over the **full episode duration**, counting time after
+    starvation at error = target. A per-step mean over alive time made starving early look good.
+  - `starved` (0/1, averages to the starvation rate), `time`, `total_eaten`.
+  - Diagnostics, averaged over alive time: `glucose_mean`/`glucose_std` (read only with `starved`),
+    `mean_move_cmd`, `mean_abs_turn_cmd`, `eat_attempt_rate`.
+  - `eat_efficiency` = eats / sum over EAT bouts of ceil(bout duration / eat_cooldown), in [0, 1].
+    Bout-based because the first eat of a bout needs no wait: the time-based version
+    (eats * cooldown / EAT-held time) gave a precise tapper 5 at dt = 0.1 and 10 at dt = 0.05.
+    Scripted forager ~0.19, precise tapper 1.0 at every dt.
+  - Why EAT presses fail, as fractions of EAT-held time, reach first: `eat_out_of_reach` (no pellet in
+    the mouth cone) and `eat_during_cooldown` (pellet in reach, cooldown running: spamming at the food).
+    The rest (~eats * dt) are successful presses. Uses `info["food_in_reach"]` / `info["eat_ready"]`,
+    recorded before eating (= the agent's in_reach / can_eat). Scripted: 0.96 / 0.00; tapper: 0 / 0.
+    Spamming through the cooldown costs the agent nothing (failed EATs do not restart it), so do not
+    expect `eat_during_cooldown` to fall unless EAT is given a cost.
+  - Every metric is a time average, an integral (sum * dt), or a physical count; step counts are not
+    dt-independent.
+
 ## Open questions / to do
 
 - **Literature values** for the placeholders in `metabolism.py` (glucose half-life, movement and
@@ -93,12 +152,24 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   previous step's (the latter needs the last action in the observation).
 - **Handling freeze** (wef stops movement during the eat cooldown): optional, not built.
 - **Second-order movement** (`motion_order=2` in wef) not ported.
-- **dt-independence check for the full env:** run the same scripted forager at `dt = 0.1` and `0.05`
-  and compare glucose traces over the same simulated time.
+- ~~dt-independence check for the full env~~ done (2026-10-26): `forage_action` on the same 10 seeded
+  episodes at dt = 0.1, 0.05, 0.02 gives the same metrics within ~1-3% (target error ~3.5, 18.3
+  pellets, no starvation). Per-step counts are not dt-independent: EAT success per *step* scales with dt;
+  use eats per second of EAT held, or count attempt bouts.
+- **Training settings that are per step** (not yet tied to seconds): GAE `lambda` (0.95 ~ a 2 s blend
+  at dt = 0.1), `n_steps` (1024 = 102 s per env per rollout), total timesteps, and per-step Gaussian
+  exploration noise (averages out faster at smaller dt). Gamma is already set from seconds.
+- **Food runs out:** the scripted forager eats ~18-19 of 20 pellets in 120 s, so `total_eaten` hits a
+  ceiling and food may limit performance. Consider respawning (wef has regrowth) before longer episodes.
 
 - **k > 1 and a limited sensing range:** try after the first training run. With k = 1 the
   "nearest" pellet can switch between steps when two are equidistant (dithering).
   With a limited range, food out of sight may call for a recurrent policy (memory).
+
+- **Action range for PPO:** SB3's checker warns that the action space is not symmetric [-1, 1].
+  PPO's Gaussian starts centered at 0 with std 1, so with move/eat in [0, 1] about half the sampled
+  `move_cmd`s clip to 0 and only ~31% of samples exceed the EAT threshold of 0.5. Options: a wrapper
+  that maps [-1, 1] to the env's ranges, or change the env's action space itself.
 
 ## Known pitfalls
 
