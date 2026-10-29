@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-10-26_
+_Last updated: 2026-10-27_
 
 ## Status
 
@@ -18,10 +18,11 @@ _Last updated: 2026-10-26_
 | 3c. Pre-training fixes, first PPO run | Done | `zfo/env.py`, `training/train_ppo.py`, `runs/ppo/` (gitignored) |
 | 3d.1 Inspect the trained agent | Done | `viz/animate_ppo.py` |
 | Repo reorganized into packages | Done | `zfo/`, `training/`, `viz/`, `tests/`, `pyproject.toml` |
+| Per-episode metrics saved (training + evaluation) | Done | `training/metrics.py`, `training/train_ppo.py`, `tests/test_metrics.py` |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-80 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
-2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is not committed yet.
+87 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
 
@@ -142,6 +143,11 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
     Bout-based because the first eat of a bout needs no wait: the time-based version
     (eats * cooldown / EAT-held time) gave a precise tapper 5 at dt = 0.1 and 10 at dt = 0.05.
     Scripted forager ~0.19, precise tapper 1.0 at every dt.
+    The denominator counts eat opportunities (a one-step tap is one), scoring each bout as if the
+    cooldown were ready at its start. So it is an upper bound on eats, not the achievable count:
+    a bout started during the cooldown from an earlier eat is a wasted opportunity. Decided to
+    keep this, since the metric is meant to reward eating when eating is possible and to penalize
+    presses spent on eats that cannot happen.
   - Why EAT presses fail, as fractions of EAT-held time, reach first: `eat_out_of_reach` (no pellet in
     the mouth cone) and `eat_during_cooldown` (pellet in reach, cooldown running: spamming at the food).
     The rest (~eats * dt) are successful presses. Uses `info["food_in_reach"]` / `info["eat_ready"]`,
@@ -150,6 +156,28 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
     expect `eat_during_cooldown` to fall unless EAT is given a cost.
   - Every metric is a time average, an integral (sum * dt), or a physical count; step counts are not
     dt-independent.
+  - **Per-episode results are kept** (2026-10-27): `evaluate` returns `{metric: array (n_episodes,)}`
+    plus `seed`, and `summarize` takes the means for the table. `train_ppo.py` saves them to
+    `runs/NAME/eval.npz` (keys `policy/metric`). Reason: means hide bimodal outcomes (starved vs not)
+    and are misleading for ratio metrics, so later analysis (conditioning on survival, pooled ratios,
+    finding a bad seed to replay with `animate_ppo.py --seed`) needs the raw episodes.
+  - **Training episodes are kept too** (2026-10-27): `HomeostasisCallback` still logs one summary
+    per rollout to `progress.csv`, and also saves every training episode to
+    `runs/NAME/train_episodes.npz`, one entry per episode: `timestep` (total env steps when it
+    ended), `env` (which parallel env) and its `episode_metrics`. Re-saved every rollout. Learning
+    curves are built from it afterwards (bin by timestep, choose the statistic per metric).
+  - **Undefined ratios are nan** (2026-10-27): `eat_efficiency`, `eat_out_of_reach` and
+    `eat_during_cooldown` are nan for an episode without EAT presses (was 0.0, which read as "ate
+    badly" / "aimed perfectly"); `summarize` averages over the episodes where a metric is defined.
+  - **Raw totals** (`RAW_KEYS`, 2026-10-27): `eat_opportunities` (count), `eat_held_time`,
+    `eat_out_of_reach_time`, `eat_during_cooldown_time` (s), so ratios can be pooled over episodes
+    (sum of numerators / sum of denominators). Left out of the printed table.
+  - **Summaries stay simple; analysis is separate** (2026-10-27): `summarize` only gives the
+    per-episode means needed by the printed table and `progress.csv`. Pooling, conditioning on
+    survival and distributions are done later on the saved `.npz` files (an analysis notebook);
+    `POOLED_RATIOS` in `metrics.py` lists which totals pool each ratio.
+  - `tests/test_metrics.py` checks the metrics on hand-built step infos (tap, one-cooldown bout,
+    no presses, failure split, starved error, dt-independence of opportunities, summarize).
 
 ## Open questions / to do
 

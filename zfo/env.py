@@ -96,12 +96,14 @@ class ZebrafishEnv(gym.Env):
         # Divides the drive reward so PPO's critic sees returns of order 1; a constant factor does not
         # change the optimal policy, and keeps the summed reward over a time interval dt-independent.
         if reward_scale is None:
-            # the drive reduction from one pellet eaten just below the target (target - intake -> target)
-            reward_scale = drive(self.glucose_target - self.intake_amount, self.glucose_target,
-                                 self.drive_n, self.drive_m)
+            # the reward for one pellet eaten just below the target (target - intake -> target),
+            # so the scaled reward is in units of "one ideal pellet"
+            reward_scale = drive_reward(self.glucose_target - self.intake_amount, self.glucose_target,
+                                        self.glucose_target, self.drive_n, self.drive_m)
         self.reward_scale = reward_scale
 
         # observation
+        # "nearest" = the n_nearest nearest pellets within sensing_range, "internal" = nothing but internal state (glucose level, can_eat)
         if obs_mode not in ("nearest", "internal"):
             raise ValueError(f"obs_mode must be 'nearest' or 'internal', got {obs_mode!r}")
         self.obs_mode = obs_mode
@@ -109,6 +111,7 @@ class ZebrafishEnv(gym.Env):
         self.sensing_range = (math.hypot(*self.arena.size)  # default: the arena diagonal, i.e. sees everything
                               if sensing_range is None else sensing_range)
 
+        # ranges of the different actions
         self.action_space = spaces.Box(low=np.array([0.0, -1.0, 0.0], dtype=np.float32),
                                        high=np.array([1.0, 1.0, 1.0], dtype=np.float32))
         obs_low = [0.0, 0.0]                                # glucose, can_eat
@@ -128,11 +131,11 @@ class ZebrafishEnv(gym.Env):
         """
         super().reset(seed=seed)
         self.arena.reset(seed)
-        self.position = self.arena.random_position(margin=self.start_margin)
-        self.heading = float(self.arena.np_random.uniform(-math.pi, math.pi))
+        self.position = self.arena.random_position(margin=self.start_margin) # random starting position
+        self.heading = float(self.arena.np_random.uniform(-math.pi, math.pi)) # random starting heading
         self.arena.spawn_food(avoid=self.position)
 
-        self.glucose = self._initial_glucose()          # drawn after food, so positions match a fixed start
+        self.glucose = self._initial_glucose()          # drawn after food, so positions match a fixed start (comparing fixed starting glucose vs. random)
         self.time_since_last_eat = self.eat_cooldown    # first eat is allowed immediately
         self.step_count = 0
         self.total_eaten = 0
@@ -145,8 +148,8 @@ class ZebrafishEnv(gym.Env):
 
         # 1. eat, at the current (observed) pose
         # what the agent observed when it chose this action (can_eat, in_reach), recorded before eating
-        eat_ready = self.can_eat()
-        food_in_reach = nearest_food_in_reach(
+        eat_ready = self.can_eat() # can_eat() checks eating cooldown
+        food_in_reach = nearest_food_in_reach( # checks whether food is in mouth cone at the start of the step, before eating
             self.position, self.heading, self.arena.food_positions, self.eat_radius, self.mouth_angle) is not None
         n_eaten = self._try_eat(eat_cmd)
 
@@ -165,6 +168,7 @@ class ZebrafishEnv(gym.Env):
         self.time_since_last_eat += self.dt # keeping track of eating cooldown
 
         # 4. reward: reduction in drive (no separate starvation penalty, as in GridWorld)
+        # we scale by reward_scale to put in order 1 for PPO
         reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n,
                               self.drive_m) / self.reward_scale
 

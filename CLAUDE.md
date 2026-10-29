@@ -24,10 +24,10 @@ so `import zfo` works from any directory and scripts can be run by path.
 | `zfo/env.py` | `ZebrafishEnv(gymnasium.Env)` (also `from zfo import ZebrafishEnv`): combines the modules above; step order is eat -> move -> glucose -> reward -> end |
 | `zfo/policies.py` | Scripted baselines as `policy(env, obs)`: `forage_action` (reads env state), `random_policy` |
 | `training/train_ppo.py` | SB3 PPO training: config, `make_env` / `make_ppo_env` (RescaleAction to [-1, 1]), `HomeostasisCallback`; writes `runs/NAME/` (gitignored) |
-| `training/metrics.py` | `episode_metrics`, `evaluate` (same seeded episodes for every policy), `ppo_policy`, `print_comparison` |
+| `training/metrics.py` | `episode_metrics`, `evaluate` (per-episode metrics on the same seeded episodes for every policy), `stack_episodes`, `summarize` (means for the table and logs only; analysis uses the saved per-episode arrays), `POOLED_RATIOS`, `ppo_policy`, `print_comparison` |
 | `viz/style.py` | Shared palette, `style_trace`, `FIGURES_DIR` (repo-root `figures/`, gitignored) |
 | `viz/plot_*.py`, `viz/animate_*.py`, `viz/compare_steering.py` | Visual checks. `animate_ppo.py` replays a trained model on an evaluation episode |
-| `tests/test_*.py` | pytest suites, one per `zfo` module |
+| `tests/test_*.py` | pytest suites, one per `zfo` module, plus `test_metrics.py` and `test_train_ppo.py` for `training/` |
 
 ## Conventions
 
@@ -60,7 +60,7 @@ so `import zfo` works from any directory and scripts can be run by path.
 - Visual checks: `conda run -n embodied_zfo python viz/animate_env.py` (and the other `viz/` scripts);
   outputs go to the repo-root `figures/` from any working directory.
 - Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME]` (~3 min for
-  the default 1M steps; writes `runs/NAME/model.zip` and `progress.csv`, then prints the random /
+  the default 1M steps; writes `runs/NAME/model.zip`, `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   scripted / PPO table). SB3 prints a table every update, so redirect stdout to a log file.
   Replay a trained agent: `conda run -n embodied_zfo python viz/animate_ppo.py --name NAME [--seed S]`.
 - New modules go in the package they belong to; keep `zfo/` free of training and plotting code.

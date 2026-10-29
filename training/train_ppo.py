@@ -2,7 +2,8 @@
 Train a PPO actor-critic (Stable-Baselines3) to keep glucose near the target, then compare it with a
 random policy and the scripted forager (zfo.policies.forage_action) on the same evaluation episodes
 (training/metrics.py).
-Run with: python training/train_ppo.py [--timesteps N] [--name NAME]  (writes runs/NAME/: model, progress.csv)
+Run with: python training/train_ppo.py [--timesteps N] [--name NAME]  (writes runs/NAME/: model, progress.csv,
+train_episodes.npz, eval.npz)
 
 Choices for this first run (see docs/PORTING_NOTES.md):
  - gamma from a horizon in seconds, exp(-dt / HORIZON), so the planning horizon does not change with dt
@@ -24,7 +25,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.logger import configure
 
-from training.metrics import episode_metrics, evaluate, ppo_policy, print_comparison
+from training.metrics import (episode_metrics, evaluate, ppo_policy, print_comparison, stack_episodes,
+                              summarize)
 from zfo.env import ZebrafishEnv
 from zfo.policies import forage_action, random_policy
 
@@ -56,34 +58,48 @@ def make_ppo_env(seed=None):
 
 class HomeostasisCallback(BaseCallback):
     """
-    Logs the mean episode_metrics of the training episodes that ended in each rollout, under
+    Logs the summarized episode_metrics of the training episodes that ended in each rollout, under
     "homeostasis/" in SB3's logger (printed and written to progress.csv).
+    Also keeps every training episode, one row each: "timestep" (total env steps, over all envs,
+    when it ended), "env" (which parallel env played it) and its episode_metrics. Saved to
+    save_path (.npz, {key: array (n_episodes,)}) after every rollout, so a crashed run keeps them.
     """
 
-    def __init__(self, dt, glucose_target, episode_duration, eat_cooldown):
+    # stores the physical parameters of the env that episode_metrics needs, and where to save episodes
+    def __init__(self, dt, glucose_target, episode_duration, eat_cooldown, save_path):
         super().__init__()
         self.dt = dt
         self.glucose_target = glucose_target
         self.episode_duration = episode_duration
         self.eat_cooldown = eat_cooldown
+        self.save_path = save_path
 
     def _on_training_start(self):
         self.traces = [[] for _ in range(self.training_env.num_envs)]   # infos so far, per env
-        self.finished = []                                              # metrics of ended episodes
+        self.finished = []                                              # metrics of episodes ended this rollout
+        self.episodes = [] # every ended episode, labelled. this is for storing raw episode metrics across every episode
 
-    def _on_step(self):
+    def _on_step(self): # runs after each vectorized step, i.e. after each step in each env
         for i, (info, done) in enumerate(zip(self.locals["infos"], self.locals["dones"])):
-            self.traces[i].append(info)
-            if done:    # the VecEnv has already reset this env, but info is still the final step's
-                self.finished.append(episode_metrics(self.traces[i], self.dt, self.glucose_target,
-                                                     self.episode_duration, self.eat_cooldown))
-                self.traces[i] = []
+            self.traces[i].append(info) # stores info for each env i
+            if done:    # the VecEnv has already reset this env, but info is still the final step's. VecEnv automatically resets env after episode finish
+                metrics = episode_metrics(self.traces[i], self.dt, self.glucose_target,
+                                          self.episode_duration, self.eat_cooldown)
+                self.finished.append(metrics)
+                # num_timesteps already counts this step (SB3 adds n_envs before calling the callback)
+                self.episodes.append({"timestep": self.num_timesteps, "env": i, **metrics})
+                self.traces[i] = [] # after logging the finished episode in self.finished, we wipe clean for the next env
         return True
 
+    # runs after each rollout (N_STEPS per env): logs the summary of the episodes finished in that
+    # rollout, and re-saves every episode so far
     def _on_rollout_end(self):
-        for key in (self.finished[0] if self.finished else {}):
-            self.logger.record(f"homeostasis/{key}", np.mean([m[key] for m in self.finished]))
+        if not self.finished:   # no episode ended in this rollout: nothing to log
+            return
+        for key, value in summarize(stack_episodes(self.finished)).items():
+            self.logger.record(f"homeostasis/{key}", value)
         self.finished = []
+        np.savez(self.save_path, **stack_episodes(self.episodes))
 
 
 if __name__ == "__main__":
@@ -100,15 +116,21 @@ if __name__ == "__main__":
                 seed=SEED, device="cpu", verbose=0)   # small MLPs: CPU is as fast as MPS for PPO
     model.set_logger(configure(run_dir, ["stdout", "csv"]))
     probe = make_env()
-    # callback: runs at every env step and collects glucose traces
-    # at the end of each rollout it logs mean episode_metrics of the episodes that finished
+    # callback: runs at every env step and collects step info
+    # keeps the metrics of every episode (saved to train_episodes.npz each rollout)
+    # at the end of each rollout it logs the summarized episode_metrics of the episodes that finished
     callback = HomeostasisCallback(probe.dt, probe.glucose_target, probe.max_steps * probe.dt,
-                                   probe.eat_cooldown)
-    model.learn(args.timesteps, callback=callback)
+                                   probe.eat_cooldown, os.path.join(run_dir, "train_episodes.npz"))
+    model.learn(args.timesteps, callback=callback) # does the whole training loop, until args.timesteps env steps have been collected
     model.save(os.path.join(run_dir, "model"))
 
-    print_comparison({
+    evals = {
         "random": evaluate(random_policy(SEED), make_env),
         "scripted": evaluate(lambda env, obs: forage_action(env), make_env),
         "ppo": evaluate(ppo_policy(model), make_ppo_env),
-    })
+    }
+    # per-episode metrics, keys "policy/metric": load with np.load(runs/NAME/eval.npz)
+    np.savez(os.path.join(run_dir, "eval.npz"),
+             **{f"{name}/{key}": values for name, per_episode in evals.items()
+                for key, values in per_episode.items()})
+    print_comparison({name: summarize(per_episode) for name, per_episode in evals.items()})

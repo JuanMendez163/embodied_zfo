@@ -71,7 +71,7 @@ def update_glucose(glucose, move_cmd, turn_cmd, n_eaten, dt,
     glucose = basal_decay(glucose, decay_rate, dt)
     glucose -= movement_cost(move_cmd, turn_cmd, dt, move_cost_rate, turn_cost_rate, move_cost_exponent)
     glucose += n_eaten * intake_amount
-    glucose = max(0.0, min(glucose, glucose_max))
+    glucose = max(0.0, min(glucose, glucose_max)) # clamping to [0, glucose_max]
     if glucose < starvation_threshold:
         glucose = 0.0
     return glucose

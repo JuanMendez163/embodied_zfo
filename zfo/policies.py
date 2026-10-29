@@ -16,6 +16,8 @@ def forage_action(env):
     Hunger-gated foraging: steer to the nearest pellet and EAT while below the glucose target,
     otherwise cruise slowly and ignore food. Reads env state directly (all food positions), so it is a
     reference, not a fair competitor, once sensing is limited.
+
+    This is just a sample policy to compare against, not trained or tuned
     """
     hungry = env.glucose < env.glucose_target
     food = env.arena.food_positions
