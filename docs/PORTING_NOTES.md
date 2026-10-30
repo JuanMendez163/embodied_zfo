@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-10-27_
+_Last updated: 2026-10-30_
 
 ## Status
 
@@ -19,9 +19,12 @@ _Last updated: 2026-10-27_
 | 3d.1 Inspect the trained agent | Done | `viz/animate_ppo.py` |
 | Repo reorganized into packages | Done | `zfo/`, `training/`, `viz/`, `tests/`, `pyproject.toml` |
 | Per-episode metrics saved (training + evaluation) | Done | `training/metrics.py`, `training/train_ppo.py`, `tests/test_metrics.py` |
+| Analysis notebooks started (2026-10-29) | Done | `notebooks/ppo_analysis.ipynb`; `viz/animate_ppo.py` split into `load_model` / `make_animation` / `save_animation` so notebooks reuse it; command panel now shows only EAT held |
+| Policy probing (2026-10-29) | Done | `training/probe.py`, `tests/test_probe.py`, notebook section "Policy probing" |
+| Learning curves (2026-10-30) | Done | `viz/plot_training.py`, run `ppo_logged` (same config as `ppo`, with `train_episodes.npz`). Episodes are grouped by the rollout they ended in (one policy version each). Starvation ends within ~6 of 123 rollouts (~49k env steps); after that survival is capped at 120 s, so later learning needs `glucose_target_error` or reward |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-87 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+92 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -180,6 +183,22 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
     no presses, failure split, starved error, dt-independence of opportunities, summarize).
 
 ## Open questions / to do
+
+- ~~Notebook outputs in git~~ decided (2026-10-29): the replay video is saved to `figures/` and not
+  embedded, so a run notebook stays small (~0.2 MB with plots). `nbstripout` only if that grows.
+- **What the first PPO agent learned (probes, run `ppo`, 2026-10-29):** EAT depends on food geometry,
+  hardly on glucose: mean eat_cmd > EAT_THRESHOLD whenever food is ahead (0.6-0.8 far, 0.9-1.1 in reach,
+  falling only slightly with glucose), < threshold when food is behind; so it holds EAT on every
+  approach (explains eat_out_of_reach ~0.97), as a failed press is free. Unclipped move and turn means
+  shift roughly linearly with glucose, by about the same amount in every food geometry (an additive bias:
+  move up, turn rightward, ~-0.02 turn per glucose unit). **Corrected 2026-10-30:** most of that shift is
+  invisible in behavior. (1) The agent spends ~90% of the time at glucose 44-59 (1st-99th percentiles
+  35-65, over 20 eval episodes); the rest of the 0-100 sweep is extrapolation. (2) There, move is clipped
+  to 1 (food ahead) or 0 (food to the side, behind or in reach), and turn to -1 (food behind or in reach),
+  whatever the glucose. The glucose burn rate of clip(mean) is flat or *falls* with glucose, so the earlier
+  reading "swims faster above target to burn excess" does not hold. What survives clipping is a turn bias
+  when food is ahead or to the side (food ahead far: turn +0.13 at 45, -0.15 at 58). Open: does that bias
+  matter? Test by ablation: evaluate with the glucose input clamped to the target.
 
 - **Literature values** for the placeholders in `metabolism.py` (glucose half-life, movement and
   turning cost rates, cost exponent; drag-based power suggests p ~ 3), `INTAKE_AMOUNT` (glucose per

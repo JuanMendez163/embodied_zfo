@@ -1,11 +1,13 @@
 """
 Video of a trained PPO agent (runs/NAME/model.zip) in one evaluation episode: the agent in the arena
-(left), its glucose trace (right, top) and its commands (right, bottom).
+(left), its glucose trace (right, top) and when it holds EAT (right, bottom; move and turn commands are
+in the status text under the arena).
 Run with: python viz/animate_ppo.py [--name ppo] [--seed 10000]  (saves figures/ppo_NAME_seedSEED.mp4)
 
 The episode is the same one training.metrics.evaluate runs for that seed (make_ppo_env, deterministic
 actions), and its episode_metrics are printed. The policy only sees the observation; env state is
 read for drawing only. The mouth cone is drawn darker while EAT is held and flashes on a successful eat.
+Notebooks use load_model, make_animation and save_animation directly (notebooks/ppo_analysis.ipynb).
 """
 
 import argparse
@@ -52,15 +54,24 @@ def simulate(model, seed):
     return base, frames, infos
 
 
-def main(name, seed):
-    model = PPO.load(os.path.join(RUNS_DIR, name, "model"), device="cpu")
+def load_model(name):
+    """
+    The trained PPO model saved in runs/NAME/model.zip.
+    """
+    return PPO.load(os.path.join(RUNS_DIR, name, "model"), device="cpu")
+
+
+def make_animation(model, name, seed):
+    """
+    The figure and FuncAnimation of one deterministic evaluation episode (seed) of model, labeled with
+    the run name, and the episode's episode_metrics. Nothing is saved; see save_animation.
+    """
     env, frames, infos = simulate(model, seed)
     metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown)
     duration = env.max_steps * env.dt
 
     times = np.array([f["t"] for f in frames])
     glucose = np.array([f["glucose"] for f in frames])
-    actions = np.array([f["action"] for f in frames])
     eat_held = np.array([f["eat_held"] for f in frames], dtype=float)
     eaten = np.array([f["eaten"] for f in frames])
 
@@ -103,18 +114,14 @@ def main(name, seed):
     ax_g.legend(loc="upper right", frameon=False, fontsize=8, labelcolor=TEXT_MUTED)
     cursor_g = ax_g.axvline(0, color=TEXT_MUTED, linewidth=0.8)
 
-    # --- command trace ---
+    # --- EAT trace: 1 while eat_cmd > EAT_THRESHOLD (move and turn are in the status text) ---
     ax_c = fig.add_subplot(grid[1, 1], sharex=ax_g)
     style_trace(ax_c, duration)
-    ax_c.set_ylim(-0.05, 1.15)
+    ax_c.set_ylim(-0.1, 1.1)
+    ax_c.set_yticks([0, 1], ["off", "held"])
     ax_c.set_xlabel("time (s)", fontsize=9, color=TEXT_MUTED)
-    ax_c.set_ylabel("command", fontsize=9, color=TEXT_MUTED)
-    (move_line,) = ax_c.plot([], [], color=AGENT, linewidth=1.5, label="move_cmd")
-    (turn_line,) = ax_c.plot([], [], color=TURN, linewidth=1.5, label="|turn_cmd|")
-    (eat_line,) = ax_c.plot([], [], color=EAT_MARK, linewidth=1, alpha=0.6, drawstyle="steps-post",
-                            label="EAT held")
-    ax_c.legend(loc="lower right", bbox_to_anchor=(1.0, 1.0), frameon=False, fontsize=8, ncol=3,
-                labelcolor=TEXT_MUTED)
+    ax_c.set_ylabel("EAT", fontsize=9, color=TEXT_MUTED)
+    (eat_line,) = ax_c.plot([], [], color=EAT_MARK, linewidth=1.5, drawstyle="steps-post")
     cursor_c = ax_c.axvline(0, color=TEXT_MUTED, linewidth=0.8)
 
     fig.suptitle(f"PPO agent '{name}', evaluation episode seed {seed} (start glucose {glucose[0]:.0f}): "
@@ -147,19 +154,30 @@ def main(name, seed):
         shown = eaten[:i + 1]
         eat_marks.set_offsets(np.column_stack([times[:i + 1][shown], glucose[:i + 1][shown]]) if shown.any()
                               else np.zeros((0, 2)))
-        move_line.set_data(times[1:i + 1], actions[1:i + 1, 0])
-        turn_line.set_data(times[1:i + 1], np.abs(actions[1:i + 1, 1]))
         eat_line.set_data(times[1:i + 1], eat_held[1:i + 1])
         cursor_g.set_xdata([frame["t"], frame["t"]])
         cursor_c.set_xdata([frame["t"], frame["t"]])
-        return (food, trail, cone, body, heading_line, status, glucose_line, eat_marks, move_line, turn_line,
-                eat_line, cursor_g, cursor_c)
+        return (food, trail, cone, body, heading_line, status, glucose_line, eat_marks, eat_line, cursor_g,
+                cursor_c)
 
     anim = FuncAnimation(fig, update, frames=len(frames), blit=True)
+    return fig, anim, metrics
+
+
+def save_animation(anim, name, seed):
+    """
+    Saves anim as figures/ppo_NAME_seedSEED.mp4 and returns the path.
+    """
     os.makedirs(FIGURES_DIR, exist_ok=True)
     out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=110, savefig_kwargs={"facecolor": SURFACE})
-    print(f"saved {out}: {len(frames) - 1} steps")
+    return out
+
+
+def main(name, seed):
+    _, anim, metrics = make_animation(load_model(name), name, seed)
+    out = save_animation(anim, name, seed)
+    print(f"saved {out}")
     print("  " + ", ".join(f"{k}={v:.3f}" for k, v in metrics.items()))
 
 

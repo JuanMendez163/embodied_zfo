@@ -10,6 +10,8 @@ dependencies:
   - gymnasium
   - pytorch
   - stable-baselines3
+  - jupyterlab        # notebooks/ (analysis)
+  - ipykernel         # kernel for VS Code / Jupyter notebooks
   - pip
   - pip:
       - -e .    # this repo (zfo, training, viz), editable: see pyproject.toml

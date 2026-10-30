@@ -25,9 +25,11 @@ so `import zfo` works from any directory and scripts can be run by path.
 | `zfo/policies.py` | Scripted baselines as `policy(env, obs)`: `forage_action` (reads env state), `random_policy` |
 | `training/train_ppo.py` | SB3 PPO training: config, `make_env` / `make_ppo_env` (RescaleAction to [-1, 1]), `HomeostasisCallback`; writes `runs/NAME/` (gitignored) |
 | `training/metrics.py` | `episode_metrics`, `evaluate` (per-episode metrics on the same seeded episodes for every policy), `stack_episodes`, `summarize` (means for the table and logs only; analysis uses the saved per-episode arrays), `POOLED_RATIOS`, `ppo_policy`, `print_comparison` |
+| `training/probe.py` | Policy probing: `probe_observations` (hand-built observations, one feature swept), `policy_gaussian` (actor mean and std in physical action units, unclipped), `eat_probability` |
 | `viz/style.py` | Shared palette, `style_trace`, `FIGURES_DIR` (repo-root `figures/`, gitignored) |
-| `viz/plot_*.py`, `viz/animate_*.py`, `viz/compare_steering.py` | Visual checks. `animate_ppo.py` replays a trained model on an evaluation episode |
-| `tests/test_*.py` | pytest suites, one per `zfo` module, plus `test_metrics.py` and `test_train_ppo.py` for `training/` |
+| `viz/plot_*.py`, `viz/animate_*.py`, `viz/compare_steering.py` | Visual checks. `animate_ppo.py` replays a trained model on an evaluation episode; `plot_training.py --name NAME` draws learning curves from `train_episodes.npz` (per-rollout mean ± standard error, x = env steps over all envs) |
+| `notebooks/*.ipynb` | Analysis notebooks (`ppo_analysis.ipynb`: evaluation episodes, replay video saved to `figures/` (not embedded), policy probing). Thin: they import from `training/` and `viz/`, so reusable code goes in those packages, not in cells |
+| `tests/test_*.py` | pytest suites, one per `zfo` module, plus `test_metrics.py`, `test_train_ppo.py` and `test_probe.py` for `training/` |
 
 ## Conventions
 
@@ -63,6 +65,9 @@ so `import zfo` works from any directory and scripts can be run by path.
   the default 1M steps; writes `runs/NAME/model.zip`, `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   scripted / PPO table). SB3 prints a table every update, so redirect stdout to a log file.
   Replay a trained agent: `conda run -n embodied_zfo python viz/animate_ppo.py --name NAME [--seed S]`.
+- Notebooks: open `notebooks/*.ipynb` with the `embodied_zfo` kernel (VS Code, or
+  `conda run -n embodied_zfo jupyter lab`). To check one runs headless: `conda run -n embodied_zfo jupyter
+  nbconvert --to notebook --execute NB.ipynb --output-dir <scratch dir>` (keeps outputs out of the repo copy).
 - New modules go in the package they belong to; keep `zfo/` free of training and plotting code.
   If `pyproject.toml` gains a package, re-run the `conda env update` above.
 
@@ -70,3 +75,7 @@ so `import zfo` works from any directory and scripts can be run by path.
 
 When a porting step is completed or a design decision is made, update `docs/PORTING_NOTES.md`
 (status, decision + reason, open questions, next step) in the same session.
+
+Claude edits only the docs it maintains: `docs/PORTING_NOTES.md` and this `CLAUDE.md`. Other files in
+`docs/` (e.g. `docs/PPO + Env Notes.md`) are the user's own notes: read them, but never modify them;
+point out anything outdated in the reply instead.
