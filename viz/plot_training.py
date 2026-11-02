@@ -43,10 +43,13 @@ def rollout_summary(rollout, values):
     """
     One summary point per rollout that ended at least one episode: (rollouts (n,), center (n,),
     low (n,), high (n,)), where center is the line drawn and low..high the shaded band.
+    nan values (undefined ratios, e.g. eat_efficiency without EAT presses) are skipped, as in
+    training.metrics.summarize; a rollout with no defined value gets no point.
     """
     rollouts, center, low, high = [], [], [], []
-    for k in np.unique(rollout):
-        mask = rollout == k
+    defined = ~np.isnan(values)
+    for k in np.unique(rollout[defined]):
+        mask = (rollout == k) & defined
         rollouts.append(k)
         center.append(np.mean(values[mask]))
         standard_error = np.std(values[mask]) / np.sqrt(np.sum(mask)) # ddof=0
@@ -55,11 +58,13 @@ def rollout_summary(rollout, values):
     return np.asarray(rollouts), np.asarray(center), np.asarray(low), np.asarray(high)
 
 
-def plot_learning_curve(ax, episodes, key, ylabel, steps_per_rollout=STEPS_PER_ROLLOUT, xmax=None):
+def plot_learning_curve(ax, episodes, key, ylabel, steps_per_rollout=STEPS_PER_ROLLOUT, xmax=None,
+                        color=AGENT, label=None, dots=True):
     """
     One metric over training: each episode as a faint dot at the timestep it ended, and its per-rollout
     summary (rollout_summary) as a line with a band, one marker per rollout, placed at the end of each
     rollout. With xmax, zooms to the first xmax env steps and draws the rollout boundaries.
+    color / label / dots=False let several runs share one axes (viz/compare_training.py).
     """
     timestep, values = episodes["timestep"], episodes[key]
     rollouts, center, low, high = rollout_summary(rollout_index(timestep, steps_per_rollout), values)
@@ -68,10 +73,11 @@ def plot_learning_curve(ax, episodes, key, ylabel, steps_per_rollout=STEPS_PER_R
         ax.set_xlim(0, xmax)
         for boundary in np.arange(steps_per_rollout, xmax, steps_per_rollout):   # one policy update each
             ax.axvline(boundary, color=GRID, linewidth=0.8, zorder=0)
-    ax.scatter(timestep, values, s=6 if xmax else 4, color=TEXT_MUTED, alpha=0.4 if xmax else 0.25,
-               linewidths=0)
-    ax.fill_between(x, low, high, color=AGENT, alpha=0.2, linewidth=0)
-    ax.plot(x, center, color=AGENT, linewidth=1.5, marker="o", markersize=4 if xmax else 2)
+    if dots:
+        ax.scatter(timestep, values, s=6 if xmax else 4, color=TEXT_MUTED, alpha=0.4 if xmax else 0.25,
+                   linewidths=0)
+    ax.fill_between(x, low, high, color=color, alpha=0.2, linewidth=0)
+    ax.plot(x, center, color=color, linewidth=1.5, marker="o", markersize=4 if xmax else 2, label=label)
     ax.set_facecolor(SURFACE)
     ax.grid(axis="y" if xmax else "both", color=GRID, linewidth=0.8)   # zoomed: verticals are rollouts
     ax.set_xlabel("env steps (all envs)")

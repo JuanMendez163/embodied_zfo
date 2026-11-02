@@ -26,7 +26,8 @@ def env_with_pellet_ahead(**kwargs):
 
 
 def test_passes_gymnasium_checker():
-    for kwargs in [{}, {"obs_mode": "internal"}, {"n_nearest": 3}, {"sensing_range": 20.0}]:
+    for kwargs in [{}, {"obs_mode": "internal"}, {"n_nearest": 3}, {"sensing_range": 20.0},
+                   {"observe_can_eat": False, "observe_in_reach": False, "n_nearest": 2}]:
         check_env(ZebrafishEnv(**kwargs), skip_render_check=True)
 
 
@@ -46,6 +47,22 @@ def test_observation_after_eating_last_pellet_senses_nothing():
     obs = env.step(EAT)[0]
     assert obs[1] == 0.0                   # cooling down
     assert not obs[2:].any()               # no food left -> nothing detected
+
+
+def test_hidden_flags_are_dropped_from_observation():
+    full = env_with_pellet_ahead()._get_obs()   # [glucose, can_eat, proximity, cos, sin, in_reach]
+    for kwargs, kept in [({"observe_can_eat": False}, [0, 2, 3, 4, 5]),
+                         ({"observe_in_reach": False}, [0, 1, 2, 3, 4]),
+                         ({"observe_can_eat": False, "observe_in_reach": False}, [0, 2, 3, 4])]:
+        env = env_with_pellet_ahead(**kwargs)
+        obs = env._get_obs()
+        assert env.observation_space.contains(obs)
+        assert np.array_equal(obs, full[kept])
+
+
+def test_hidden_in_reach_is_dropped_for_every_sensed_pellet():
+    env = ZebrafishEnv(n_nearest=3, observe_in_reach=False)
+    assert env.reset(seed=0)[0].shape == (2 + 3 * 3,)
 
 
 def test_internal_obs_mode_is_blind():

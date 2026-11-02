@@ -25,6 +25,18 @@ def test_probe_observation_matches_env():
     assert np.allclose(probe[0], expected, atol=1e-6)
 
 
+def test_probe_drops_hidden_flags():
+    # same pellet as above, with both flags left out of the observation
+    env = make_ppo_env(observe_can_eat=False, observe_in_reach=False)
+    env.reset(seed=0)
+    base = env.unwrapped
+    base.position, base.heading = np.array([50.0, 50.0]), 0.0
+    base.arena.food_positions = 50.0 + 10.0 * np.array([[math.cos(math.pi / 4), math.sin(math.pi / 4)]])
+    probe = probe_observations(env, base.glucose, proximity=1 - 10.0 / base.sensing_range, bearing=math.pi / 4)
+    assert probe.shape == (1, 4)
+    assert np.allclose(probe[0], base._get_obs(), atol=1e-6)
+
+
 def test_probe_observations_broadcast_a_sweep():
     env = make_ppo_env()
     obs = probe_observations(env, np.linspace(0, 100, 7), proximity=0.5)

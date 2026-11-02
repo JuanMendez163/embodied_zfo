@@ -47,6 +47,8 @@ class ZebrafishEnv(gym.Env):
      - "nearest":  for each of the n_nearest nearest pellets within sensing_range,
                    [proximity, cos(bearing), sin(bearing), in_reach] (see sensing.py); zeros if not sensed
      - "internal": nothing else (a blind baseline)
+    observe_can_eat=False / observe_in_reach=False drop that flag from the observation (ablations: the
+    agent must then infer the cooldown, or reachability from proximity and bearing).
     Reward: reduction in drive (distance from glucose_target) over the step, divided by reward_scale.
     glucose_start: None (start at glucose_target), a number, or a (low, high) range sampled uniformly
     at every reset.
@@ -62,7 +64,8 @@ class ZebrafishEnv(gym.Env):
                  glucose_half_life=GLUCOSE_HALF_LIFE, move_cost_rate=MOVE_COST_RATE,
                  turn_cost_rate=TURN_COST_RATE, move_cost_exponent=MOVE_COST_EXPONENT,
                  intake_amount=INTAKE_AMOUNT, starvation_threshold=STARVATION_THRESHOLD,
-                 drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None, seed=None):
+                 drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
+                 observe_can_eat=True, observe_in_reach=True, seed=None):
         super().__init__()
         self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance, seed=seed)
 
@@ -110,13 +113,15 @@ class ZebrafishEnv(gym.Env):
         self.n_nearest = n_nearest                          # pellets sensed (k)
         self.sensing_range = (math.hypot(*self.arena.size)  # default: the arena diagonal, i.e. sees everything
                               if sensing_range is None else sensing_range)
+        self.observe_can_eat = observe_can_eat              # False: cooldown flag left out of the observation
+        self.observe_in_reach = observe_in_reach            # False: in_reach column left out of the food rows
 
         # ranges of the different actions
         self.action_space = spaces.Box(low=np.array([0.0, -1.0, 0.0], dtype=np.float32),
                                        high=np.array([1.0, 1.0, 1.0], dtype=np.float32))
-        obs_low = [0.0, 0.0]                                # glucose, can_eat
+        obs_low = [0.0] + [0.0] * observe_can_eat           # glucose, can_eat
         if obs_mode == "nearest":
-            obs_low += [0.0, -1.0, -1.0, 0.0] * n_nearest   # proximity, cos, sin, in_reach per pellet
+            obs_low += ([0.0, -1.0, -1.0] + [0.0] * observe_in_reach) * n_nearest   # proximity, cos, sin, in_reach per pellet
         # observation_space maps the range of all possible observations
         # needed for Gymnasium to know the shape and bounds of the observation space, and for checks
         self.observation_space = spaces.Box(low=np.array(obs_low, dtype=np.float32),
@@ -231,13 +236,16 @@ class ZebrafishEnv(gym.Env):
 
     def _get_obs(self):
         """
-        Internal state, then (obs_mode="nearest") the flattened (n_nearest, 4) food sensor.
+        Internal state, then (obs_mode="nearest") the flattened (n_nearest, 4) food sensor, without the
+        flags that observe_can_eat / observe_in_reach leave out.
         """
-        internal = [self.glucose / self.glucose_max, float(self.can_eat())]
+        internal = [self.glucose / self.glucose_max] + [float(self.can_eat())] * self.observe_can_eat
         if self.obs_mode == "internal":
             return np.array(internal, dtype=np.float32)
         food = nearest_food_observation(self.position, self.heading, self.arena.food_positions,
                                         self.n_nearest, self.sensing_range, self.eat_radius, self.mouth_angle)
+        if not self.observe_in_reach:
+            food = food[:, :3]                              # drop the in_reach column
         return np.concatenate([internal, food.ravel()]).astype(np.float32)
 
     def _get_info(self):

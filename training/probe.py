@@ -27,6 +27,8 @@ def probe_observations(env, glucose, can_eat=1.0, proximity=0.0, bearing=0.0, in
     Not every combination occurs in the env: in_reach = 1 needs proximity > 1 - eat_radius / sensing_range
     and |bearing| < mouth_angle / 2, and "nothing sensed" is an all-zero food row (cos and sin both 0),
     which no bearing gives; for that, set observations[:, 2:] = 0.
+    Columns the env leaves out (observe_can_eat / observe_in_reach = False) are dropped, and their
+    arguments ignored; then the column indices above shift.
     """
     if env.unwrapped.obs_mode != "nearest" or env.unwrapped.n_nearest != 1:
         raise ValueError("probe_observations assumes obs_mode='nearest' and n_nearest=1")
@@ -34,6 +36,8 @@ def probe_observations(env, glucose, can_eat=1.0, proximity=0.0, bearing=0.0, in
         *(np.asarray(x, dtype=float) for x in (glucose, can_eat, proximity, bearing, in_reach)))
     columns = [glucose / env.unwrapped.glucose_max, can_eat, proximity, np.cos(bearing), np.sin(bearing),
                in_reach]
+    observed = [True, env.unwrapped.observe_can_eat, True, True, True, env.unwrapped.observe_in_reach]
+    columns = [c for c, keep in zip(columns, observed) if keep]
     return np.column_stack([np.ravel(c) for c in columns]).astype(np.float32)
 
 

@@ -22,7 +22,7 @@ from matplotlib.patches import Circle, Wedge
 from stable_baselines3 import PPO
 
 from training.metrics import EVAL_SEED, episode_metrics
-from training.train_ppo import RUNS_DIR, make_ppo_env
+from training.train_ppo import RUNS_DIR, load_env_kwargs, make_ppo_env
 from viz.style import AGENT, EAT_MARK, FIGURES_DIR, FOOD, SURFACE, TEXT, TEXT_MUTED, TURN, style_trace
 
 FPS = 30              # 3x real time at dt = 0.1
@@ -30,12 +30,12 @@ TRAIL = 50            # past steps shown behind the agent
 CONE_ALPHA = {"idle": 0.12, "held": 0.35, "eaten": 0.8}
 
 
-def simulate(model, seed):
+def simulate(model, seed, env_kwargs=None):
     """
-    One deterministic episode of the policy on make_ppo_env, reset with seed.
+    One deterministic episode of the policy on make_ppo_env(**env_kwargs), reset with seed.
     Returns the unwrapped env, per-step frames for drawing, and the step infos (for episode_metrics).
     """
-    env = make_ppo_env()
+    env = make_ppo_env(**(env_kwargs or {}))
     obs, info = env.reset(seed=seed)
     base = env.unwrapped
     frames = [{"t": 0.0, "position": base.position.copy(), "heading": base.heading, "glucose": base.glucose,
@@ -66,7 +66,7 @@ def make_animation(model, name, seed):
     The figure and FuncAnimation of one deterministic evaluation episode (seed) of model, labeled with
     the run name, and the episode's episode_metrics. Nothing is saved; see save_animation.
     """
-    env, frames, infos = simulate(model, seed)
+    env, frames, infos = simulate(model, seed, load_env_kwargs(name))
     metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown)
     duration = env.max_steps * env.dt
 

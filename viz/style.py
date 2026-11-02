@@ -15,6 +15,8 @@ AGENT = "#2a78d6"
 FOOD = "#1baf7a"
 TURN = "#eb6834"
 EAT_MARK = "#008300"
+# categorical colors for comparing runs, assigned in this fixed order (blue, orange, aqua, yellow)
+RUN_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
 
 
 def style_trace(ax, duration):

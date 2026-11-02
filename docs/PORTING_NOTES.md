@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-10-30_
+_Last updated: 2026-11-02_
 
 ## Status
 
@@ -22,9 +22,10 @@ _Last updated: 2026-10-30_
 | Analysis notebooks started (2026-10-29) | Done | `notebooks/ppo_analysis.ipynb`; `viz/animate_ppo.py` split into `load_model` / `make_animation` / `save_animation` so notebooks reuse it; command panel now shows only EAT held |
 | Policy probing (2026-10-29) | Done | `training/probe.py`, `tests/test_probe.py`, notebook section "Policy probing" |
 | Learning curves (2026-10-30) | Done | `viz/plot_training.py`, run `ppo_logged` (same config as `ppo`, with `train_episodes.npz`). Episodes are grouped by the rollout they ended in (one policy version each). Starvation ends within ~6 of 123 rollouts (~49k env steps); after that survival is capped at 120 s, so later learning needs `glucose_target_error` or reward |
+| Observation-flag ablation (2026-11-02) | Done | `ZebrafishEnv(observe_can_eat=, observe_in_reach=)`, `train_ppo.py --hide`, runs `hide_can_eat`, `hide_in_reach`, `hide_both`; `viz/compare_training.py` (runs overlaid: survival / starved / eaten with the first-100k zoom, plus a `_homeostasis` figure of target error / EAT attempt rate; efficiency dropped as noise-dominated); results below |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-92 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+95 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -56,13 +57,62 @@ _Last updated: 2026-10-30_
   while resting), not by reach. Occasional double eats overshoot to ~65. Ate all 20 pellets; the arena
   was empty by ~111 s.
 
+## Observation-flag ablation (2026-11-02)
+
+Question: can PPO learn without being told the cooldown has passed (`can_eat`) or that a pellet is in
+reach (`in_reach`)? `ZebrafishEnv(observe_can_eat=False, observe_in_reach=False)` drop those columns
+(the obs shrinks; nothing is zeroed). `train_ppo.py --hide can_eat in_reach` sets them and writes
+`runs/NAME/env_kwargs.json`, which `load_env_kwargs` reads back so `viz/animate_ppo.py` and
+`training/probe.py` rebuild the same layout. Seed 0, 1M steps, otherwise the `ppo_logged` config
+(the "full" baseline).
+
+| run | eval starved (det.) | eval error (det.) | eval error (stoch.) | eaten (stoch.) | P(EAT) d=1.9 / d=2.1 |
+|---|---|---|---|---|---|
+| full (`ppo_logged`) | 0.00 | 3.7 | 7.0 | 20.0 | 0.90 / 0.77 |
+| no can_eat | 0.00 | 6.0 | 5.8 | 19.6 | 0.72 / 0.50 |
+| no in_reach | **1.00** | 37.6 | 7.3 | 20.0 | 0.94 / 0.94 |
+| neither | 0.00 | 6.8 | 6.1 | 19.6 | 0.51 / 0.51 |
+
+(30 eval episodes; "stoch." = sampled actions, as in training. P(EAT): pellet straight ahead at
+distance d, glucose 45; eat_radius = 2.)
+
+- **Learning is unaffected.** Training curves (error, survival) overlap for all four
+  (`figures/compare_obs_flags.png`). First rollout without starvation, i.e. PPO updates needed: full 5,
+  no can_eat 6, neither 6, no in_reach 7 (49k-65k steps). One or two updates apart on one seed, so
+  not a real difference yet. Training error over the last 10 rollouts 5.5-6.5 in every run.
+- **can_eat is redundant in this env:** pellets spawn >= 10 apart and top speed is 10/s, so the next
+  pellet is >= 1 s away, longer than the 0.5 s cooldown. Revisit if the cooldown becomes longer than
+  the travel time between pellets (or food is clustered).
+- **in_reach is used when given, not learned when hidden.** With the flag, P(EAT) steps up at the reach
+  boundary; without it, P(EAT) is flat in distance and the EAT attempt rate drifts up during training
+  (~0.4 with the flag vs ~0.7 without, by 1M steps). The agent never extracts the reach boundary
+  (proximity > 1 - 2/141 ~ 0.986, a thin sliver) from proximity and bearing, because a failed EAT is free:
+  holding EAT on every approach costs nothing. Testing whether reach *can* be learned needs an EAT cost.
+- **The deterministic starvation of `hide_in_reach` is an evaluation artifact, not a learning failure.**
+  Its stochastic policy eats all 20 pellets. The mean action with food ahead is move +0.81, turn -0.85
+  (turning radius ~3 units), i.e. it orbits (see Known pitfalls); turn noise (std ~0.65) breaks the orbit
+  in training. Every run has some turn bias with food ahead (full -0.38, neither +0.57); this one is just
+  large enough to trap the mean policy. Single seed: do not attribute it to hiding in_reach.
+
 ## Next step: 3d.2 make the task harder
 
 1. **Remove the food ceiling** (first): respawn eaten pellets (wef has regrowth) and/or lengthen
    episodes, so `total_eaten` and the target error can separate policies again. Re-run
    `training/train_ppo.py` and compare with the first run.
 2. Harder sensing: limited `sensing_range`, `n_nearest` > 1.
-3. Several seeds per configuration before trusting small differences.
+3. Several seeds per configuration before trusting small differences. **Deferred (2026-11-02):** while
+   exploring qualitatively, one seed per configuration is enough; do the following for quantitative claims.
+   - The training seed (`SEED` in `train_ppo.py`: initial weights, training arenas via `make_vec_env`,
+     action sampling) is varied; evaluation seeds (`EVAL_SEED`) stay fixed, so every agent sees the same
+     30 arenas. Needs a `--seed` flag in `train_ppo.py`.
+   - Unit of analysis = the seed (one agent), not the episode: pooling episodes across seeds is
+     pseudo-replication. Reduce each seed to one number per metric chosen in advance (e.g. area under the
+     starvation curve over the first 100k steps, stochastic eval error, P(EAT) step at the reach boundary),
+     then compare conditions on those numbers (mean + interval over seeds, individual seeds shown).
+     Curves: per-seed rollout means as thin lines, mean over seeds bold, band = SE over seeds.
+   - How many: 3 suffices for large, per-agent qualitative effects; for small differences (e.g. 1-2 PPO
+     updates) use >= 5 (a 3-vs-3 permutation test cannot reach two-sided p < 0.1) and a continuous metric
+     rather than "updates to no starvation" (an integer).
 4. Optional: a small cost per EAT attempt, if precise eating (tapping) should emerge.
 
 Sector sensors (option B, wef style) remain an alternative `obs_mode`: S angular sectors, each
@@ -220,6 +270,16 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   `total_eaten` hits a ceiling and food limits performance (next step).
 - **EAT is free:** failed attempts cost nothing, so PPO holds EAT whenever hungry (~46% of the time).
   A small per-attempt cost, or restarting the cooldown on failed attempts, would reward precision.
+  It is also why hiding `in_reach` changes nothing (ablation, 2026-11-02): rerun that ablation with an
+  EAT cost to see whether reachability is learned from proximity and bearing.
+- **`eat_efficiency` on training episodes is noise-dominated** (2026-11-02): with sampled actions (eat
+  std ~0.47) EAT flickers into 2-3 step bouts, each counting as one opportunity, so opportunities
+  (~275-286 per episode) track the press flip rate, not held time (48-83 s): efficiency is ~0.07 in all
+  four ablation runs, while deterministic eval separates them (0.156 full vs 0.075 neither). Read
+  `eat_attempt_rate` for training curves; efficiency only for deterministic or low-noise policies.
+- **Deterministic evaluation can mislead** (2026-11-02): a policy whose mean action orbits can look
+  starved in `evaluate(ppo_policy(model), ...)` while its sampled actions forage fine. Report both
+  deterministic and stochastic evaluation when comparing runs, and use several seeds.
 
 - **k > 1 and a limited sensing range:** try after the first training run. With k = 1 the
   "nearest" pellet can switch between steps when two are equidistant (dithering).

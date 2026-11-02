@@ -2,8 +2,9 @@
 Train a PPO actor-critic (Stable-Baselines3) to keep glucose near the target, then compare it with a
 random policy and the scripted forager (zfo.policies.forage_action) on the same evaluation episodes
 (training/metrics.py).
-Run with: python training/train_ppo.py [--timesteps N] [--name NAME]  (writes runs/NAME/: model, progress.csv,
-train_episodes.npz, eval.npz)
+Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach]  (writes
+runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
+--hide drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach).
 
 Choices for this first run (see docs/PORTING_NOTES.md):
  - gamma from a horizon in seconds, exp(-dt / HORIZON), so the planning horizon does not change with dt
@@ -14,6 +15,8 @@ Choices for this first run (see docs/PORTING_NOTES.md):
 """
 
 import argparse
+import functools
+import json
 import math
 import os
 from pathlib import Path
@@ -41,19 +44,32 @@ SEED = 0
 RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"   # repo-root runs/, wherever this is run from
 
 
-def make_env(seed=None):
+def make_env(seed=None, **env_kwargs):
     """
     The env in physical action units, as the random and scripted baselines use it.
+    env_kwargs (e.g. observe_in_reach=False) are passed on to ZebrafishEnv.
     """
-    return ZebrafishEnv(dt=DT, glucose_start=GLUCOSE_START, seed=seed)
+    return ZebrafishEnv(dt=DT, glucose_start=GLUCOSE_START, seed=seed, **env_kwargs)
 
 
-def make_ppo_env(seed=None):
+def make_ppo_env(seed=None, **env_kwargs):
     """
     The env as PPO sees it, in training and evaluation alike: actions in [-1, 1], mapped by
     RescaleAction to the physical ranges. The only place that translation is defined.
     """
-    return RescaleAction(make_env(seed), min_action=-1.0, max_action=1.0)
+    return RescaleAction(make_env(seed, **env_kwargs), min_action=-1.0, max_action=1.0)
+
+
+def load_env_kwargs(name):
+    """
+    The env_kwargs runs/NAME was trained with (env_kwargs.json); {} for runs saved before it existed,
+    which used the defaults. Pass them to make_ppo_env so the observation layout matches the model.
+    """
+    path = os.path.join(RUNS_DIR, name, "env_kwargs.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
 
 class HomeostasisCallback(BaseCallback):
@@ -108,14 +124,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--timesteps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument("--name", default="ppo")
+    parser.add_argument("--hide", nargs="*", default=[], choices=["can_eat", "in_reach"],
+                        help="observation flags to leave out")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
+    env_kwargs = {f"observe_{flag}": False for flag in args.hide}
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
+        json.dump(env_kwargs, f)
+    env_fn = functools.partial(make_env, **env_kwargs)
+    ppo_env_fn = functools.partial(make_ppo_env, **env_kwargs)
 
-    vec_env = make_vec_env(make_ppo_env, n_envs=N_ENVS, seed=SEED) # creates N_ENVS copies of the env, each with a different seed
+    vec_env = make_vec_env(ppo_env_fn, n_envs=N_ENVS, seed=SEED) # creates N_ENVS copies of the env, each with a different seed
     model = PPO("MlpPolicy", vec_env, n_steps=N_STEPS, batch_size=256, gamma=GAMMA, gae_lambda=0.95,
                 seed=SEED, device="cpu", verbose=0)   # small MLPs: CPU is as fast as MPS for PPO
     model.set_logger(configure(run_dir, ["stdout", "csv"]))
-    probe = make_env()
+    probe = env_fn()
     # callback: runs at every env step and collects step info
     # keeps the metrics of every episode (saved to train_episodes.npz each rollout)
     # at the end of each rollout it logs the summarized episode_metrics of the episodes that finished
@@ -125,9 +149,9 @@ if __name__ == "__main__":
     model.save(os.path.join(run_dir, "model"))
 
     evals = {
-        "random": evaluate(random_policy(SEED), make_env),
-        "scripted": evaluate(lambda env, obs: forage_action(env), make_env),
-        "ppo": evaluate(ppo_policy(model), make_ppo_env),
+        "random": evaluate(random_policy(SEED), env_fn),
+        "scripted": evaluate(lambda env, obs: forage_action(env), env_fn),
+        "ppo": evaluate(ppo_policy(model), ppo_env_fn),
     }
     # per-episode metrics, keys "policy/metric": load with np.load(runs/NAME/eval.npz)
     np.savez(os.path.join(run_dir, "eval.npz"),

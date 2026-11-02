@@ -23,11 +23,11 @@ so `import zfo` works from any directory and scripts can be run by path.
 | `zfo/arena.py` | `Arena`: walls, food as an `(N, 2)` array, `spawn_food`, `remove_food`, `draw` |
 | `zfo/env.py` | `ZebrafishEnv(gymnasium.Env)` (also `from zfo import ZebrafishEnv`): combines the modules above; step order is eat -> move -> glucose -> reward -> end |
 | `zfo/policies.py` | Scripted baselines as `policy(env, obs)`: `forage_action` (reads env state), `random_policy` |
-| `training/train_ppo.py` | SB3 PPO training: config, `make_env` / `make_ppo_env` (RescaleAction to [-1, 1]), `HomeostasisCallback`; writes `runs/NAME/` (gitignored) |
+| `training/train_ppo.py` | SB3 PPO training: config, `make_env` / `make_ppo_env` (RescaleAction to [-1, 1]; take env kwargs), `load_env_kwargs`, `HomeostasisCallback`; writes `runs/NAME/` (gitignored) |
 | `training/metrics.py` | `episode_metrics`, `evaluate` (per-episode metrics on the same seeded episodes for every policy), `stack_episodes`, `summarize` (means for the table and logs only; analysis uses the saved per-episode arrays), `POOLED_RATIOS`, `ppo_policy`, `print_comparison` |
 | `training/probe.py` | Policy probing: `probe_observations` (hand-built observations, one feature swept), `policy_gaussian` (actor mean and std in physical action units, unclipped), `eat_probability` |
 | `viz/style.py` | Shared palette, `style_trace`, `FIGURES_DIR` (repo-root `figures/`, gitignored) |
-| `viz/plot_*.py`, `viz/animate_*.py`, `viz/compare_steering.py` | Visual checks. `animate_ppo.py` replays a trained model on an evaluation episode; `plot_training.py --name NAME` draws learning curves from `train_episodes.npz` (per-rollout mean ± standard error, x = env steps over all envs) |
+| `viz/plot_*.py`, `viz/animate_*.py`, `viz/compare_steering.py` | Visual checks. `animate_ppo.py` replays a trained model on an evaluation episode; `plot_training.py --name NAME` draws learning curves from `train_episodes.npz` (per-rollout mean ± standard error, x = env steps over all envs); `compare_training.py --names A B ... [--labels ...] --out OUT` overlays up to 4 runs in `compare_OUT.png` (survival, starved, eaten; whole run + first-100k zoom with rollout boundaries) and `compare_OUT_homeostasis.png` (target error, EAT attempt rate) |
 | `notebooks/*.ipynb` | Analysis notebooks (`ppo_analysis.ipynb`: evaluation episodes, replay video saved to `figures/` (not embedded), policy probing). Thin: they import from `training/` and `viz/`, so reusable code goes in those packages, not in cells |
 | `tests/test_*.py` | pytest suites, one per `zfo` module, plus `test_metrics.py`, `test_train_ppo.py` and `test_probe.py` for `training/` |
 
@@ -61,8 +61,8 @@ so `import zfo` works from any directory and scripts can be run by path.
 - Tests: `conda run -n embodied_zfo python -m pytest -q` (all should pass before committing).
 - Visual checks: `conda run -n embodied_zfo python viz/animate_env.py` (and the other `viz/` scripts);
   outputs go to the repo-root `figures/` from any working directory.
-- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME]` (~3 min for
-  the default 1M steps; writes `runs/NAME/model.zip`, `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
+- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach]` (~3 min for
+  the default 1M steps; `--hide` drops those observation flags; writes `runs/NAME/model.zip`, `env_kwargs.json` (read back by `load_env_kwargs`, so replay and probes rebuild the same observation), `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   scripted / PPO table). SB3 prints a table every update, so redirect stdout to a log file.
   Replay a trained agent: `conda run -n embodied_zfo python viz/animate_ppo.py --name NAME [--seed S]`.
 - Notebooks: open `notebooks/*.ipynb` with the `embodied_zfo` kernel (VS Code, or
