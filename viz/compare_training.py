@@ -7,9 +7,11 @@ Run with: python viz/compare_training.py --names RUN ... [--labels LABEL ...] [-
 compare_OUT.png: survival time, fraction of episodes starved, pellets eaten. Top row: the whole run;
 bottom row: the first --zoom env steps, with the rollout boundaries (one PPO update each), to count how
 many updates a run needed.
-compare_OUT_homeostasis.png: glucose target error and EAT attempt rate, whole run only. (EAT efficiency
-is left out: on training episodes, sampled EAT flickers into short bouts, so it is noise-dominated; see
-docs/PORTING_NOTES.md.)
+compare_OUT_homeostasis.png: glucose target error, EAT attempt rate, strike rate and strike miss fraction
+(strikes: presses with the cooldown passed, counted as if each restarted the cooldown; see
+training/metrics.py), whole run only. Runs trained before the strike metrics existed lack those panels'
+data and are skipped there. (EAT efficiency is left out: on training episodes, sampled EAT flickers into
+short bouts, so it is noise-dominated; see docs/PORTING_NOTES.md.)
 Episodes are grouped by rollout as in viz/plot_training.py; the per-episode dots are left out so the
 runs stay readable.
 """
@@ -28,7 +30,9 @@ SURVIVAL_METRICS = [("time", "survival time (s)", "linear"),
                     ("starved", "fraction of episodes starved", "linear"),
                     ("total_eaten", "pellets eaten", "linear")]
 HOMEOSTASIS_METRICS = [("glucose_target_error", "glucose target error (log)", "log"),
-                       ("eat_attempt_rate", "EAT attempt rate (fraction of time held)", "linear")]
+                       ("eat_attempt_rate", "EAT attempt rate (fraction of time held)", "linear"),
+                       ("eat_strike_rate", "strikes per s alive", "linear"),
+                       ("eat_strike_miss", "fraction of strikes that miss", "linear")]
 
 
 def plot_comparison(runs, metrics, zoom=None):
@@ -45,6 +49,8 @@ def plot_comparison(runs, metrics, zoom=None):
     for row, xmax in enumerate(rows):
         for col, (key, ylabel, yscale) in enumerate(metrics):
             for color, (label, episodes) in zip(RUN_COLORS, runs.items()):
+                if key not in episodes:   # run saved before this metric existed
+                    continue
                 plot_learning_curve(axes[row, col], episodes, key, ylabel, xmax=xmax, color=color,
                                     label=label, dots=False)
             axes[row, col].set_yscale(yscale)

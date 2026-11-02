@@ -13,7 +13,8 @@ EVAL_EPISODES = 30
 EVAL_SEED = 10_000 # evaluation episodes use seeds the training envs never see; equivalent to a "train-test" split
 # per-episode totals (counts, seconds) that the ratio metrics are built from, kept so ratios can be
 # pooled over episodes (sum of numerators / sum of denominators); left out of the printed table
-RAW_KEYS = ("eat_opportunities", "eat_held_time", "eat_out_of_reach_time", "eat_during_cooldown_time")
+RAW_KEYS = ("eat_opportunities", "eat_held_time", "eat_out_of_reach_time", "eat_during_cooldown_time",
+            "eat_strikes")
 
 
 def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
@@ -38,6 +39,18 @@ def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
     reach = np.array([i["food_in_reach"] for i in infos])
     info = infos[-1] # taking info of last step
     n_attempts = attempts.sum() # the total number of steps where the agent attempted to eat
+
+    # strikes counted as if each one restarted the cooldown (one when a ready hold starts, then one per
+    # eat_cooldown while held), so the count does not depend on dt with or without the cost; with
+    # eat_attempt_resets_cooldown on, this equals attempts & ready
+    strikes = np.zeros(len(infos), dtype=bool)
+    since_strike = np.inf                         # s since the last strike; the first ready press counts
+    for i in range(len(infos)):
+        if attempts[i] and ready[i] and since_strike >= eat_cooldown - 1e-9:
+            strikes[i] = True
+            since_strike = 0.0
+        since_strike += dt
+    n_strikes = strikes.sum()
 
     # EAT bouts (runs of consecutive steps with EAT held; a one-step tap is a bout of duration dt):
     # a bout lasting D s counts ceil(D / eat_cooldown) eat opportunities (one at its start, then one
@@ -79,11 +92,14 @@ def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
         # fractions of EAT-held time
         "eat_out_of_reach": float(out_of_reach_time / eat_held_time) if n_attempts else np.nan,
         "eat_during_cooldown": float(during_cooldown_time / eat_held_time) if n_attempts else np.nan,
+        "eat_strike_rate": float(n_strikes / (len(infos) * dt)),                 # strikes per s alive
+        "eat_strike_miss": float(1 - info["total_eaten"] / n_strikes) if n_strikes else np.nan,
         # raw totals (RAW_KEYS)
         "eat_opportunities": float(possible_eats),
         "eat_held_time": float(eat_held_time),
         "eat_out_of_reach_time": float(out_of_reach_time),
         "eat_during_cooldown_time": float(during_cooldown_time),
+        "eat_strikes": float(n_strikes),
     }
 
 

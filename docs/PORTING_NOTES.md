@@ -94,6 +94,43 @@ distance d, glucose 45; eat_radius = 2.)
   in training. Every run has some turn bias with food ahead (full -0.38, neither +0.57); this one is just
   large enough to trap the mean policy. Single seed: do not attribute it to hiding in_reach.
 
+## EAT cost: failed attempts restart the cooldown (2026-11-02)
+
+Run `eat_cost` (`--eat-attempt-resets-cooldown`, full observation, seed 0, 1M steps) vs `ppo_logged` (same
+config without the cost). Figures: `viz/compare_training.py --names ppo_logged eat_cost --out eat_cost`.
+
+| run | first rollout w/o starvation | train error (last 10 rollouts) | eval error mean / sampled | eval glucose mean (mean action) | attempt rate (train, last 10) | out of reach (train) |
+|---|---|---|---|---|---|---|
+| no cost (`ppo_logged`) | 5 (~49k steps) | 6.5 | 3.7 / 7.0 | 50.7 | 0.47 | 0.97 |
+| EAT cost (`eat_cost`) | 8 (~74k steps) | 7.0 | 10.6 / 6.6 | 58.7 | 0.42 | 0.91 |
+
+- Learning is slower early (~3 updates later to stop starving; survival flat at ~51 s for rollouts 1-4),
+  final homeostasis about the same (sampled eval 6.6 vs 7.0). One seed.
+- The mean-action policy overeats (glucose ~59, eats ~20); sampled actions do not. Another case of
+  deterministic evaluation diverging from the trained (stochastic) policy.
+- The EAT rule barely changed: P(hold EAT) ~0.9 in reach, ~0.78 beyond, not glucose-gated, in both runs
+  (probe, pellet straight ahead). It still holds EAT on approaches rather than tapping. What changed is the
+  approach speed: with the cost, move falls with glucose (0.91 at 35 -> 0.61 at 65, pellet 20 ahead);
+  without, it rises (0.83 -> 0.96). Likely why: a held EAT strikes every 0.5 s, and a pellet straight ahead
+  is in reach for only ~0.2 s at full speed, so a slower approach raises the hit rate.
+- **Strike metrics** (added 2026-11-02, `training/metrics.py`: `eat_strike_rate` per s alive,
+  `eat_strike_miss`, raw `eat_strikes`). A strike = a press with the cooldown passed, counted as if each
+  strike restarted the cooldown (own clock + the env's `ready`), so it is dt-independent with or without the
+  cost, and equals `attempts & ready` when the cost is on (tested). Both runs were retrained (same seed,
+  CPU) to log them; every existing metric reproduced exactly.
+- **The cost raises strikes:** train (last 10 rollouts) 1.79/s vs 1.54/s, miss 0.908 vs 0.893; eval with
+  the mean action 1.44 vs 0.93/s. Scripted forager: 1.32 vs 0.76/s (failing keeps it hungry, so it holds
+  EAT more: attempt rate 0.62 vs 0.35). Reasons: a miss only costs if a pellet comes into reach within the
+  next cooldown, so strikes far from food are free in practice (weak gradient; the slower approach targets
+  the one part that does cost); and one press per 0.5 s window is enough to strike, so the cost agent's flat
+  P(EAT) (~0.42-0.54 in every situation) strikes in more windows than the no-cost agent's concentrated one
+  (0.64 food ahead, 0.31 no food). Training strike rates sit near the 2/s ceiling (sampled presses at
+  p ~ 0.4 fill 92% of windows); the mean-action ordering is the same.
+- Next options: `--eat-attempt-resets-cooldown --hide in_reach`; the stronger rule (presses during the
+  cooldown also restart it), which removes the hold-and-slow solution; a reward penalty per missed strike
+  (charges misses everywhere, not only near food; size must stay well below one pellet's reward); or less
+  EAT exploration noise.
+
 ## Next step: 3d.2 make the task harder
 
 1. **Remove the food ceiling** (first): respawn eaten pellets (wef has regrowth) and/or lengthen
@@ -270,8 +307,26 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   `total_eaten` hits a ceiling and food limits performance (next step).
 - **EAT is free:** failed attempts cost nothing, so PPO holds EAT whenever hungry (~46% of the time).
   A small per-attempt cost, or restarting the cooldown on failed attempts, would reward precision.
+  **Built (2026-11-02):** `ZebrafishEnv(eat_attempt_resets_cooldown=True)` / `train_ppo.py
+  --eat-attempt-resets-cooldown` (default off, so earlier runs replay unchanged). Decision: an *attempt* is
+  a press made once the cooldown has passed; it restarts the cooldown eaten or not. Presses during the
+  cooldown cost nothing (the stronger option, where they also restart it, would make holding EAT never
+  succeed and force release-then-tap; harder exploration since the initial policy presses ~50% of steps).
+  So holding EAT strikes once per eat_cooldown, which keeps `eat_efficiency`'s one-opportunity-per-cooldown
+  accounting exact. Baselines under the rule (30 eval episodes): scripted (holds EAT when hungry) still
+  survives, error 3.74 -> 5.42, eaten 17.9 -> 17.4, efficiency 0.198 -> 0.111; random unchanged (starves).
+  This also makes `can_eat` informative (the cooldown now follows the agent's own presses), so the
+  hide_can_eat ablation is worth rerunning under it.
   It is also why hiding `in_reach` changes nothing (ablation, 2026-11-02): rerun that ablation with an
   EAT cost to see whether reachability is learned from proximity and bearing.
+- **Learning-curve points mix two policy versions** (2026-11-02, kept as is): episodes (1200 steps) are
+  longer than a rollout per env (1024), so each env ends 0-1 episodes per rollout (5-8 per rollout,
+  mean 8 * 1024 / 1200 = 6.83, set by the envs' phase offsets from early starvations), and each episode
+  spans policies k-1 and k. Blur <= 1 update and identical across runs, so fine for relative comparisons;
+  not for exact "updates needed" counts (resolution ~ +-1 update). Options, at the next config change
+  (rerun all conditions then): `n_steps = round(episode_duration / dt)` (whole episodes per rollout while
+  none starve; batch_size must divide 9600, e.g. 320), and/or log the rollout each episode *started* in
+  (`HomeostasisCallback`), which stays correct with early termination or longer episodes.
 - **`eat_efficiency` on training episodes is noise-dominated** (2026-11-02): with sampled actions (eat
   std ~0.47) EAT flickers into 2-3 step bouts, each counting as one opportunity, so opportunities
   (~275-286 per episode) track the press flip rate, not held time (48-83 s): efficiency is ~0.07 in all

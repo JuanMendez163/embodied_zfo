@@ -49,6 +49,8 @@ class ZebrafishEnv(gym.Env):
      - "internal": nothing else (a blind baseline)
     observe_can_eat=False / observe_in_reach=False drop that flag from the observation (ablations: the
     agent must then infer the cooldown, or reachability from proximity and bearing).
+    eat_attempt_resets_cooldown=True makes a failed EAT cost something: an attempt restarts the cooldown
+    whether or not it eats (default False: only a successful eat does, as in GridWorld).
     Reward: reduction in drive (distance from glucose_target) over the step, divided by reward_scale.
     glucose_start: None (start at glucose_target), a number, or a (low, high) range sampled uniformly
     at every reset.
@@ -65,7 +67,7 @@ class ZebrafishEnv(gym.Env):
                  turn_cost_rate=TURN_COST_RATE, move_cost_exponent=MOVE_COST_EXPONENT,
                  intake_amount=INTAKE_AMOUNT, starvation_threshold=STARVATION_THRESHOLD,
                  drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
-                 observe_can_eat=True, observe_in_reach=True, seed=None):
+                 observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False, seed=None):
         super().__init__()
         self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance, seed=seed)
 
@@ -83,6 +85,7 @@ class ZebrafishEnv(gym.Env):
         self.eat_radius = eat_radius
         self.mouth_angle = mouth_angle                      # full width of the mouth cone (rad)
         self.eat_cooldown = eat_cooldown                    # s between successful eats
+        self.eat_attempt_resets_cooldown = eat_attempt_resets_cooldown   # True: failed attempts restart it too
 
         # metabolism (see metabolism.py; rates are placeholders until set from the literature)
         self.glucose_target = glucose_target
@@ -203,10 +206,12 @@ class ZebrafishEnv(gym.Env):
         (time_since_last_eat >= eat_cooldown) and nearest_food_in_reach finds a pellet in the
         mouth cone. A successful eat removes that pellet from the arena, counts it in
         total_eaten, and restarts the cooldown.
-        TODO: do we want failed eats to restart eating cooldown? (GridWorld does not, but it might be more realistic to do so.)
+        With eat_attempt_resets_cooldown, a failed attempt restarts the cooldown too.
         """
-        if eat_cmd <= EAT_THRESHOLD or not self.can_eat(): # agent didn't choose eat or the cooldown hasn't passed
+        if eat_cmd <= EAT_THRESHOLD or not self.can_eat(): # no press, or a press during the cooldown (costs nothing)
             return 0
+        if self.eat_attempt_resets_cooldown: # all eat attempts reset cooldown, even if it turns out not successful
+            self.time_since_last_eat = 0.0 
         food_index = nearest_food_in_reach(
             self.position, self.heading, self.arena.food_positions, self.eat_radius, self.mouth_angle)
         if food_index is None: # no food in reach

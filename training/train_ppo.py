@@ -5,6 +5,7 @@ random policy and the scripted forager (zfo.policies.forage_action) on the same 
 Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach]  (writes
 runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 --hide drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach).
+--eat-attempt-resets-cooldown makes failed EAT attempts restart the cooldown (a cost for failed EATs).
 
 Choices for this first run (see docs/PORTING_NOTES.md):
  - gamma from a horizon in seconds, exp(-dt / HORIZON), so the planning horizon does not change with dt
@@ -126,9 +127,13 @@ if __name__ == "__main__":
     parser.add_argument("--name", default="ppo")
     parser.add_argument("--hide", nargs="*", default=[], choices=["can_eat", "in_reach"],
                         help="observation flags to leave out")
+    parser.add_argument("--eat-attempt-resets-cooldown", action="store_true",
+                        help="failed EAT attempts restart the eating cooldown")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = {f"observe_{flag}": False for flag in args.hide}
+    if args.eat_attempt_resets_cooldown:
+        env_kwargs["eat_attempt_resets_cooldown"] = True
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)

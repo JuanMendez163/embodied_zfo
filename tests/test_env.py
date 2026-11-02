@@ -127,6 +127,33 @@ def test_info_reports_eat_conditions_before_eating():
     assert not info["eat_ready"] and info["food_in_reach"] and info["n_eaten"] == 0
 
 
+def test_failed_eat_keeps_cooldown_by_default():
+    env = env_with_pellet_ahead()
+    env.heading = math.pi                  # pellet behind: the press fails
+    env.step(EAT)
+    assert env.can_eat()
+
+
+def test_failed_eat_restarts_cooldown_when_enabled():
+    env = env_with_pellet_ahead(eat_attempt_resets_cooldown=True)
+    env.heading = math.pi                  # pellet behind: the press fails
+    env.step(EAT)
+    assert not env.can_eat()
+    env.heading, env.position = 0.0, np.array([50.0, 50.0])   # pellet back in the mouth
+    info = env.step(EAT)[4]
+    assert not info["eat_ready"] and info["n_eaten"] == 0     # still cooling down from the failed press
+
+
+def test_held_eat_strikes_once_per_cooldown_when_enabled():
+    # presses during the cooldown cost nothing: holding EAT with no food in reach restarts the
+    # cooldown once per eat_cooldown, so the ready flag comes back every eat_cooldown / dt steps
+    env = env_with_pellet_ahead(eat_attempt_resets_cooldown=True)
+    env.arena.food_positions = np.zeros((0, 2))
+    ready = [env.step([0.0, 0.0, 1.0])[4]["eat_ready"] for _ in range(20)]
+    period = round(env.eat_cooldown / env.dt)
+    assert ready == [i % period == 0 for i in range(20)]
+
+
 def test_info_food_in_reach_follows_mouth_cone():
     env = env_with_pellet_ahead()
     env.heading = math.pi                  # pellet now behind
