@@ -2,10 +2,13 @@
 Video of a trained PPO agent (runs/NAME/model.zip) in one evaluation episode: the agent in the arena
 (left), its glucose trace (right, top) and when it holds EAT (right, bottom; move and turn commands are
 in the status text under the arena).
-Run with: python viz/animate_ppo.py [--name ppo] [--seed 10000]  (saves figures/ppo_NAME_seedSEED.mp4)
+Run with: python viz/animate_ppo.py [--name ppo] [--seed 10000] [--sampled]
+(saves figures/ppo_NAME_seedSEED.mp4, or ppo_NAME_seedSEED_sampled.mp4)
 
 The episode is the same one training.metrics.evaluate runs for that seed (make_ppo_env, deterministic
-actions), and its episode_metrics are printed. The policy only sees the observation; env state is
+actions), and its episode_metrics are printed. --sampled draws actions from the policy's Gaussian instead,
+as in training (sampler seeded with the episode seed, so the video is reproducible); use it when the mean
+action misrepresents the policy (e.g. a press-cost run without can_eat, whose mean action holds EAT forever). The policy only sees the observation; env state is
 read for drawing only. The mouth cone is drawn darker while EAT is held and flashes on a successful eat.
 Notebooks use load_model, make_animation and save_animation directly (notebooks/ppo_analysis.ipynb).
 """
@@ -30,20 +33,23 @@ TRAIL = 50            # past steps shown behind the agent
 CONE_ALPHA = {"idle": 0.12, "held": 0.35, "eaten": 0.8}
 
 
-def simulate(model, seed, env_kwargs=None):
+def simulate(model, seed, env_kwargs=None, sampled=False):
     """
-    One deterministic episode of the policy on make_ppo_env(**env_kwargs), reset with seed.
+    One episode of the policy on make_ppo_env(**env_kwargs), reset with seed: mean actions, or actions
+    sampled from the policy's Gaussian if sampled (sampler seeded with seed).
     Returns the unwrapped env, per-step frames for drawing, and the step infos (for episode_metrics).
     """
     env = make_ppo_env(**(env_kwargs or {}))
     obs, info = env.reset(seed=seed)
     base = env.unwrapped
+    if sampled:
+        model.set_random_seed(seed)
     frames = [{"t": 0.0, "position": base.position.copy(), "heading": base.heading, "glucose": base.glucose,
                "food": base.arena.food_positions.copy(), "action": np.zeros(3), "eat_held": False,
                "eaten": False}]
     infos, done = [], False
     while not done:
-        action, _ = model.predict(obs, deterministic=True)
+        action, _ = model.predict(obs, deterministic=not sampled)
         obs, _, terminated, truncated, info = env.step(action)
         infos.append(info)
         frames.append({"t": info["time"], "position": base.position.copy(), "heading": base.heading,
@@ -61,12 +67,12 @@ def load_model(name):
     return PPO.load(os.path.join(RUNS_DIR, name, "model"), device="cpu")
 
 
-def make_animation(model, name, seed):
+def make_animation(model, name, seed, sampled=False):
     """
-    The figure and FuncAnimation of one deterministic evaluation episode (seed) of model, labeled with
-    the run name, and the episode's episode_metrics. Nothing is saved; see save_animation.
+    The figure and FuncAnimation of one evaluation episode (seed) of model, with mean or sampled actions,
+    labeled with the run name, and the episode's episode_metrics. Nothing is saved; see save_animation.
     """
-    env, frames, infos = simulate(model, seed, load_env_kwargs(name))
+    env, frames, infos = simulate(model, seed, load_env_kwargs(name), sampled)
     metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown)
     duration = env.max_steps * env.dt
 
@@ -124,7 +130,8 @@ def make_animation(model, name, seed):
     (eat_line,) = ax_c.plot([], [], color=EAT_MARK, linewidth=1.5, drawstyle="steps-post")
     cursor_c = ax_c.axvline(0, color=TEXT_MUTED, linewidth=0.8)
 
-    fig.suptitle(f"PPO agent '{name}', evaluation episode seed {seed} (start glucose {glucose[0]:.0f}): "
+    fig.suptitle(f"PPO agent '{name}' ({'sampled' if sampled else 'mean'} actions), "
+                 f"evaluation episode seed {seed} (start glucose {glucose[0]:.0f}): "
                  f"target error {metrics['glucose_target_error']:.1f}, {metrics['total_eaten']:.0f} eaten, "
                  f"EAT held {100 * metrics['eat_attempt_rate']:.0f}% of the time",
                  fontsize=11, color=TEXT, x=0.03, ha="left")
@@ -164,19 +171,19 @@ def make_animation(model, name, seed):
     return fig, anim, metrics
 
 
-def save_animation(anim, name, seed):
+def save_animation(anim, name, seed, sampled=False):
     """
-    Saves anim as figures/ppo_NAME_seedSEED.mp4 and returns the path.
+    Saves anim as figures/ppo_NAME_seedSEED.mp4 (ppo_NAME_seedSEED_sampled.mp4 if sampled) and returns the path.
     """
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}.mp4")
+    out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}{'_sampled' if sampled else ''}.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=110, savefig_kwargs={"facecolor": SURFACE})
     return out
 
 
-def main(name, seed):
-    _, anim, metrics = make_animation(load_model(name), name, seed)
-    out = save_animation(anim, name, seed)
+def main(name, seed, sampled=False):
+    _, anim, metrics = make_animation(load_model(name), name, seed, sampled)
+    out = save_animation(anim, name, seed, sampled)
     print(f"saved {out}")
     print("  " + ", ".join(f"{k}={v:.3f}" for k, v in metrics.items()))
 
@@ -185,5 +192,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="ppo")
     parser.add_argument("--seed", type=int, default=EVAL_SEED)
+    parser.add_argument("--sampled", action="store_true", help="sample actions instead of the mean action")
     args = parser.parse_args()
-    main(args.name, args.seed)
+    main(args.name, args.seed, args.sampled)

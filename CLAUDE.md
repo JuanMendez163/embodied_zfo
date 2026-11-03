@@ -61,10 +61,13 @@ so `import zfo` works from any directory and scripts can be run by path.
 - Tests: `conda run -n embodied_zfo python -m pytest -q` (all should pass before committing).
 - Visual checks: `conda run -n embodied_zfo python viz/animate_env.py` (and the other `viz/` scripts);
   outputs go to the repo-root `figures/` from any working directory.
-- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach] [--eat-attempt-resets-cooldown | --eat-press-resets-cooldown]` (~3 min for
-  the default 1M steps; `--hide` drops those observation flags; writes `runs/NAME/model.zip`, `env_kwargs.json` (read back by `load_env_kwargs`, so replay and probes rebuild the same observation), `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
+- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [can_eat] [in_reach]] [--eat-cost none|attempt|press]` (~3 min for
+  the default 1M steps). **Defaults (2026-11-03): both flags hidden, attempt cost** (`HIDE_FLAGS`, `EAT_COST` in
+  `train_ppo.py`; `--hide` with no flags observes both). `ZebrafishEnv`'s own defaults stay all-observed / no cost,
+  so older runs whose `env_kwargs.json` is `{}` replay unchanged; new runs save every setting explicitly
+  (`run_env_kwargs`). Writes `runs/NAME/model.zip`, `env_kwargs.json` (read back by `load_env_kwargs`, so replay and probes rebuild the same observation), `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   PPO table). SB3 prints a table every update, so redirect stdout to a log file.
-  Replay a trained agent: `conda run -n embodied_zfo python viz/animate_ppo.py --name NAME [--seed S]`.
+  Replay a trained agent: `conda run -n embodied_zfo python viz/animate_ppo.py --name NAME [--seed S] [--sampled]` (`--sampled`: actions drawn from the policy's Gaussian, as in training; needed when the mean action misrepresents the policy).
 - Notebooks: open `notebooks/*.ipynb` with the `embodied_zfo` kernel (VS Code, or
   `conda run -n embodied_zfo jupyter lab`). To check one runs headless: `conda run -n embodied_zfo jupyter
   nbconvert --to notebook --execute NB.ipynb --output-dir <scratch dir>` (keeps outputs out of the repo copy).

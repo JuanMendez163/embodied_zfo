@@ -25,9 +25,10 @@ _Last updated: 2026-11-03_
 | Observation-flag ablation (2026-11-02) | Done | `ZebrafishEnv(observe_can_eat=, observe_in_reach=)`, `train_ppo.py --hide`, runs `hide_can_eat`, `hide_in_reach`, `hide_both`; `viz/compare_training.py` (runs overlaid: survival / starved / eaten with the first-100k zoom, plus a `_homeostasis` figure of target error / EAT attempt rate; efficiency dropped as noise-dominated); results below |
 | Stricter EAT cost: every press restarts the cooldown (2026-11-03) | Done | `ZebrafishEnv(eat_press_resets_cooldown=True)`, `train_ppo.py --eat-press-resets-cooldown`, run `eat_press_cost`; results below |
 | EAT costs with both flags hidden (2026-11-03) | Done | runs `nocost_hide_both` (retrain of `hide_both` with strike metrics; reproduces it exactly), `eat_cost_hide_both`, `eat_press_cost_hide_both`; results below |
+| New training defaults: flags hidden + attempt cost (2026-11-03) | Done | `training/train_ppo.py` (`HIDE_FLAGS`, `EAT_COST`, `run_env_kwargs`, `--eat-cost`), `tests/test_train_ppo.py`; decision below |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-109 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+111 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -203,11 +204,35 @@ retrained to log strike metrics (every earlier metric reproduced exactly). Figur
   0.89 / 0.65 / 0.32 (no-food-sensed 0.10 / 0.02 / 0.00); the no-cost run is milder (0.63 / 0.51 / 0.38),
   and with flags `eat_cost` is not glucose-gated at all (~0.94 at every glucose). Attempt rate 0.33 vs 0.73
   without cost. Mean-action eval works for this run (error 4.2, best mean-action error of the cost runs).
+  **How its mean action eats (checked 2026-11-03, 30 eval episodes):** not by holding EAT. eat_cmd is above
+  threshold only with the pellet within ~10 deg of dead ahead or beyond ~130 deg (bearing when pressing:
+  quartiles 2 / 149 deg; when not: median 14 deg), so as the bearing drifts during steering EAT comes in short
+  bursts (median 0.3 s, 16% single-step taps) separated by gaps of median 0.7 s (96% >= 0.5 s). Each burst
+  therefore starts with the cooldown passed and strikes once (2.8 strikes per s of pressing, above the
+  2/s of a continuous hold). Strikes happen at the pellet (median distance 0.2) but often with it beside or
+  behind (median bearing 91 deg, 41% within 15 deg), hence miss 0.79. The timing comes from movement, not
+  from a clock: holding EAT would also work under this cost (the scripted forager did), but this agent
+  does not hold.
+  **With the flags visible (`eat_cost`, same analysis):** much more tapping. 84% of bursts are single-step taps
+  (16% without flags), gaps median 0.4 s, 57% of presses made with the cooldown passed (28%). But the taps are
+  clocked by `can_eat`, not aimed by `in_reach`: it taps as the cooldown passes, wherever it is, so only 11% of
+  strikes have a pellet in reach (18% without flags) and it strikes more (5167 vs 3093 over 30 episodes, for
+  593 vs 543 eaten). `in_reach` is used (P(press | pellet in reach) 0.97 vs 0.22 without flags), but strikes
+  far from food are almost free under this cost, so nothing stops the clocked taps. Video:
+  `figures/ppo_eat_cost_seed10000.mp4` (mean action): dense regular taps while hungry, sparse while sated,
+  and a steady tap rhythm after the arena is empty (~96 s on).
 - **Press cost without flags: a stochastic tapper, broken under the mean action.** Mean-action eval:
-  0 pellets, glucose 12.7, error 37.8 (survives 120 s only because decay is slow). With P(EAT) > 0.5
-  the mean eat_cmd is above threshold, so the mean action holds EAT forever and the press rule never lets it
-  strike. Sampled actions supply the release gaps: without can_eat (and no memory) it cannot time a release,
-  so noise does it. **Evaluate press-cost runs without can_eat with sampled actions only.**
+  0 pellets in all 30 episodes, glucose 12.7, error 37.8 (survives 120 s only because decay is slow).
+  Two stages (traced 2026-11-03, seed 10001, then checked on all 30): (1) on the approach the mean eat_cmd
+  is above threshold (P(EAT) 0.65-0.97 with a pellet ahead or beside), so it holds EAT the whole way and
+  the press rule keeps the cooldown from passing; it arrives unable to eat. (2) It overshoots onto the
+  pellet (distance ~0, proximity 1.0, a state training rarely reaches because pellets are eaten before
+  that) where the mean action is move 0, turn 0, EAT off: the observation stops changing (only glucose
+  drifts), so the deterministic policy is at a fixed point and sits on an in-reach pellet that one tap would
+  eat. 30/30 episodes end motionless on a pellet in reach (final distance median 0.00, max 0.19). The first
+  note here ("holds EAT forever") was half right: eval attempt rate is 0.03 because it freezes within
+  ~5 s (median). Sampled actions supply the release gaps (and break the freeze): without can_eat (and no
+  memory) it cannot time a release, so noise does it. **Evaluate press-cost runs without can_eat with sampled actions only.**
 - **Its low miss rate comes from bearing, through an inverted press rate.** P(EAT) by bearing (d = 10,
   glucose 45): 0 deg 0.65, 30 deg 0.85, 60-90 deg 0.93, 135 deg 0.87, 180 deg 0.45; the no-cost and attempt-cost runs
   are the reverse (highest ahead). Under the press rule a strike needs 4 press-free steps then a press, so
@@ -216,6 +241,14 @@ retrained to log strike metrics (every earlier metric reproduced exactly). Figur
   so strikes land mostly with the pellet ahead (miss 0.54). Distance does not enter (d = 1.5 and 10 give the
   same P), and it approaches slower than the no-cost run (move 0.65 vs 0.81 at d = 5). This is per-step
   noise doing timing work, so it is tied to dt = 0.1 (the number of press-free steps per cooldown).
+- **Videos (2026-11-03):** `viz/animate_ppo.py --name eat_press_cost_hide_both --sampled` (new flag; actions
+  sampled, sampler seeded with the episode seed) -> `figures/ppo_eat_press_cost_hide_both_seed10000_sampled.mp4`:
+  20 eaten, error 6.8, EAT pressed 51% of the time as rapid irregular flicker, 44 strikes (miss 0.55). The same
+  episode with the mean action (`..._seed10000.mp4`): 0 eaten, glucose 7.3, nearly motionless; also
+  `..._seed10001.mp4` (mean action): same, freezes on top of its first pellet at ~4 s.
+  Same pair for `nocost_hide_both` (mean / sampled: 20 / 20 eaten, error 6.5 / 8.6, EAT held 95% / 67%) and
+  `eat_cost_hide_both` (20 / 20 eaten, error 3.8 / 6.9, EAT held 29% / 29%); only the press-cost run breaks
+  under the mean action.
 - **Not converged:** in training, strike miss is still falling at 1M steps (~0.75 at 0.7M -> ~0.57), and the
   attempt rate rises from ~0.3 to ~0.5 after ~0.6M while strikes fall (the strategy above taking over).
 - **Strike metric fix (2026-11-03), affects the no-cost rows only.** Under no cost a failed strike does not
@@ -233,6 +266,27 @@ retrained to log strike metrics (every earlier metric reproduced exactly). Figur
 - Next options: train `eat_press_cost_hide_both` longer (e.g. 3M) to see where miss settles; give the
   agent memory (frame stack or recurrent PPO) to test whether it then learns release-and-tap timing without
   can_eat; several seeds for the hunger-gating and bearing-inversion findings.
+
+## Default run configuration (2026-11-03)
+
+**Decision:** future runs default to `can_eat` and `in_reach` hidden and the attempt cost
+(`train_ppo.py`: `HIDE_FLAGS = ("can_eat", "in_reach")`, `EAT_COST = "attempt"`). Reason: of the six
+configurations above it is the middle ground that trains reliably (no starvation from ~74k steps, sampled
+error 7.4) *and* whose mean action also works (error 4.2, 18.1 eaten), unlike the press cost without flags;
+it learns a hunger-gated EAT rather than leaning on observation flags, and later changes (food regrowth,
+limited sensing, memory) can build on it. Its equivalent run is `eat_cost_hide_both`.
+- **Defaults live in `train_ppo.py`, not `ZebrafishEnv`.** Runs saved before this (`ppo`, `ppo_logged`, `eat_cost`,
+  `eat_press_cost`, `hide_*`) wrote only non-default kwargs (`{}` for the baseline), so changing the env defaults
+  would make `load_env_kwargs` rebuild them with the wrong observation layout. The env keeps all flags observed
+  and no cost (GridWorld-like); `tests/` and the `viz/` demos use those.
+- **New runs save every setting explicitly** (`run_env_kwargs`: both `observe_*` and both cost flags), so they
+  replay the same whatever the defaults become.
+- **CLI changed:** `--eat-cost none|attempt|press` replaces `--eat-attempt-resets-cooldown` /
+  `--eat-press-resets-cooldown` (earlier sections quote the old flags: attempt = `--eat-cost attempt`,
+  press = `--eat-cost press`). `--hide` alone observes both flags. To reproduce the old baseline
+  (`ppo_logged`): `--hide --eat-cost none`.
+- Careful: `--name` still defaults to `ppo`, so a run without `--name` overwrites `runs/ppo` (the first run,
+  old configuration).
 
 ## Next step: 3d.2 make the task harder
 

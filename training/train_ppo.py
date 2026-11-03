@@ -2,11 +2,17 @@
 Train a PPO actor-critic (Stable-Baselines3) to keep glucose near the target, then compare it with a
 random policy (a lower bound) on the same evaluation episodes (training/metrics.py). Trained agents are
 compared with each other across runs (eval.npz, viz/compare_training.py).
-Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach]  (writes
-runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
---hide drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach).
---eat-attempt-resets-cooldown makes failed EAT attempts restart the cooldown (a cost for failed EATs).
---eat-press-resets-cooldown is stricter: every EAT press restarts it, even during the cooldown.
+Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FLAG ...]] [--eat-cost RULE]
+(writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
+Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost (HIDE_FLAGS, EAT_COST below).
+--hide FLAG ... drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach);
+  --hide with no flags observes both.
+--eat-cost none | attempt | press: failed EATs are free (GridWorld) | a press with the cooldown passed
+  restarts it, eaten or not (eat_attempt_resets_cooldown) | every press restarts it, even during the
+  cooldown (eat_press_resets_cooldown).
+env_kwargs.json records every one of these settings explicitly, so a run replays the same however the
+defaults change. ZebrafishEnv's own defaults are unchanged (all flags observed, no cost), so runs saved
+with env_kwargs.json = {} still replay as trained.
 
 Choices for this first run (see docs/PORTING_NOTES.md):
  - gamma from a horizon in seconds, exp(-dt / HORIZON), so the planning horizon does not change with dt
@@ -44,6 +50,24 @@ N_STEPS = 1024                    # steps per env per rollout (8192 per PPO upda
 TOTAL_TIMESTEPS = 1_000_000       # ~28 simulated hours
 SEED = 0
 RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"   # repo-root runs/, wherever this is run from
+# default run configuration (2026-11-03): no observation flags, failed EATs cost a cooldown
+# (trains reliably and its mean action also works; see docs/PORTING_NOTES.md)
+HIDE_FLAGS = ("can_eat", "in_reach")
+EAT_COST = "attempt"
+EAT_COSTS = ("none", "attempt", "press")
+
+
+def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST):
+    """
+    The ZebrafishEnv kwargs of a run, with every observation flag and EAT rule set explicitly (saved as
+    env_kwargs.json). hide: observation flags to leave out ("can_eat", "in_reach"); eat_cost: one of
+    EAT_COSTS.
+    """
+    if eat_cost not in EAT_COSTS:
+        raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
+    return {"observe_can_eat": "can_eat" not in hide, "observe_in_reach": "in_reach" not in hide,
+            "eat_attempt_resets_cooldown": eat_cost == "attempt",
+            "eat_press_resets_cooldown": eat_cost == "press"}
 
 
 def make_env(seed=None, **env_kwargs):
@@ -126,19 +150,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--timesteps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument("--name", default="ppo")
-    parser.add_argument("--hide", nargs="*", default=[], choices=["can_eat", "in_reach"],
-                        help="observation flags to leave out")
-    parser.add_argument("--eat-attempt-resets-cooldown", action="store_true",
-                        help="failed EAT attempts restart the eating cooldown")
-    parser.add_argument("--eat-press-resets-cooldown", action="store_true",
-                        help="every EAT press restarts the eating cooldown, even during it")
+    parser.add_argument("--hide", nargs="*", default=list(HIDE_FLAGS), choices=["can_eat", "in_reach"],
+                        help="observation flags to leave out (default: both; --hide alone observes both)")
+    parser.add_argument("--eat-cost", default=EAT_COST, choices=EAT_COSTS,
+                        help="what a failed EAT costs (default: attempt)")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
-    env_kwargs = {f"observe_{flag}": False for flag in args.hide}
-    if args.eat_attempt_resets_cooldown:
-        env_kwargs["eat_attempt_resets_cooldown"] = True
-    if args.eat_press_resets_cooldown:
-        env_kwargs["eat_press_resets_cooldown"] = True
+    env_kwargs = run_env_kwargs(args.hide, args.eat_cost)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)
