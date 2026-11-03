@@ -154,6 +154,38 @@ def test_held_eat_strikes_once_per_cooldown_when_enabled():
     assert ready == [i % period == 0 for i in range(20)]
 
 
+def test_press_during_cooldown_restarts_it_when_enabled():
+    env = env_with_pellet_ahead(eat_press_resets_cooldown=True)
+    env.heading = math.pi                  # pellet behind: the first press fails and restarts the cooldown
+    env.step(EAT)
+    env.step(IDLE)                         # 0.2 s since the failed press
+    env.step(EAT)                          # pressed during the cooldown: restarts it
+    for _ in range(round(env.eat_cooldown / env.dt) - 2):
+        env.step(IDLE)
+    assert not env.can_eat()               # 0.6 s since the first press, but only 0.4 s since the second
+    env.step(IDLE)
+    assert env.can_eat()
+
+
+def test_held_eat_strikes_only_once_when_presses_restart_cooldown():
+    env = env_with_pellet_ahead(eat_press_resets_cooldown=True)
+    env.arena.food_positions = np.zeros((0, 2))
+    ready = [env.step(EAT)[4]["eat_ready"] for _ in range(20)]
+    assert ready == [True] + [False] * 19
+
+
+def test_tap_after_release_eats_when_presses_restart_cooldown():
+    env = env_with_pellet_ahead(eat_press_resets_cooldown=True)
+    env.heading = math.pi                  # held EAT with the pellet behind
+    for _ in range(5):
+        env.step(EAT)
+    env.heading = 0.0
+    for _ in range(round(env.eat_cooldown / env.dt)):
+        env.step(IDLE)                     # release for one cooldown
+    env.position = np.array([50.0, 50.0])
+    assert env.step(EAT)[4]["n_eaten"] == 1
+
+
 def test_info_food_in_reach_follows_mouth_cone():
     env = env_with_pellet_ahead()
     env.heading = math.pi                  # pellet now behind

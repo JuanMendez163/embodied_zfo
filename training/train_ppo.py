@@ -1,11 +1,12 @@
 """
 Train a PPO actor-critic (Stable-Baselines3) to keep glucose near the target, then compare it with a
-random policy and the scripted forager (zfo.policies.forage_action) on the same evaluation episodes
-(training/metrics.py).
+random policy (a lower bound) on the same evaluation episodes (training/metrics.py). Trained agents are
+compared with each other across runs (eval.npz, viz/compare_training.py).
 Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide can_eat in_reach]  (writes
 runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 --hide drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach).
 --eat-attempt-resets-cooldown makes failed EAT attempts restart the cooldown (a cost for failed EATs).
+--eat-press-resets-cooldown is stricter: every EAT press restarts it, even during the cooldown.
 
 Choices for this first run (see docs/PORTING_NOTES.md):
  - gamma from a horizon in seconds, exp(-dt / HORIZON), so the planning horizon does not change with dt
@@ -32,7 +33,7 @@ from stable_baselines3.common.logger import configure
 from training.metrics import (episode_metrics, evaluate, ppo_policy, print_comparison, stack_episodes,
                               summarize)
 from zfo.env import ZebrafishEnv
-from zfo.policies import forage_action, random_policy
+from zfo.policies import random_policy
 
 DT = 0.1                          # s per step
 HORIZON = 30.0                    # s; discounting time constant (~ the glucose half-life). This represents the agent's planning range. TODO can be informed by literature
@@ -47,7 +48,7 @@ RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"   # repo-root runs/, whe
 
 def make_env(seed=None, **env_kwargs):
     """
-    The env in physical action units, as the random and scripted baselines use it.
+    The env in physical action units, as the random baseline uses it.
     env_kwargs (e.g. observe_in_reach=False) are passed on to ZebrafishEnv.
     """
     return ZebrafishEnv(dt=DT, glucose_start=GLUCOSE_START, seed=seed, **env_kwargs)
@@ -129,11 +130,15 @@ if __name__ == "__main__":
                         help="observation flags to leave out")
     parser.add_argument("--eat-attempt-resets-cooldown", action="store_true",
                         help="failed EAT attempts restart the eating cooldown")
+    parser.add_argument("--eat-press-resets-cooldown", action="store_true",
+                        help="every EAT press restarts the eating cooldown, even during it")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = {f"observe_{flag}": False for flag in args.hide}
     if args.eat_attempt_resets_cooldown:
         env_kwargs["eat_attempt_resets_cooldown"] = True
+    if args.eat_press_resets_cooldown:
+        env_kwargs["eat_press_resets_cooldown"] = True
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)
@@ -155,7 +160,6 @@ if __name__ == "__main__":
 
     evals = {
         "random": evaluate(random_policy(SEED), env_fn),
-        "scripted": evaluate(lambda env, obs: forage_action(env), env_fn),
         "ppo": evaluate(ppo_policy(model), ppo_env_fn),
     }
     # per-episode metrics, keys "policy/metric": load with np.load(runs/NAME/eval.npz)

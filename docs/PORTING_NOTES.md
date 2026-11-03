@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-11-02_
+_Last updated: 2026-11-03_
 
 ## Status
 
@@ -23,9 +23,10 @@ _Last updated: 2026-11-02_
 | Policy probing (2026-10-29) | Done | `training/probe.py`, `tests/test_probe.py`, notebook section "Policy probing" |
 | Learning curves (2026-10-30) | Done | `viz/plot_training.py`, run `ppo_logged` (same config as `ppo`, with `train_episodes.npz`). Episodes are grouped by the rollout they ended in (one policy version each). Starvation ends within ~6 of 123 rollouts (~49k env steps); after that survival is capped at 120 s, so later learning needs `glucose_target_error` or reward |
 | Observation-flag ablation (2026-11-02) | Done | `ZebrafishEnv(observe_can_eat=, observe_in_reach=)`, `train_ppo.py --hide`, runs `hide_can_eat`, `hide_in_reach`, `hide_both`; `viz/compare_training.py` (runs overlaid: survival / starved / eaten with the first-100k zoom, plus a `_homeostasis` figure of target error / EAT attempt rate; efficiency dropped as noise-dominated); results below |
+| Stricter EAT cost: every press restarts the cooldown (2026-11-03) | Done | `ZebrafishEnv(eat_press_resets_cooldown=True)`, `train_ppo.py --eat-press-resets-cooldown`, run `eat_press_cost`; results below |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-95 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+107 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -127,9 +128,52 @@ config without the cost). Figures: `viz/compare_training.py --names ppo_logged e
   (0.64 food ahead, 0.31 no food). Training strike rates sit near the 2/s ceiling (sampled presses at
   p ~ 0.4 fill 92% of windows); the mean-action ordering is the same.
 - Next options: `--eat-attempt-resets-cooldown --hide in_reach`; the stronger rule (presses during the
-  cooldown also restart it), which removes the hold-and-slow solution; a reward penalty per missed strike
+  cooldown also restart it), which removes the hold-and-slow solution (**built and run 2026-11-03**, next section); a reward penalty per missed strike
   (charges misses everywhere, not only near food; size must stay well below one pellet's reward); or less
   EAT exploration noise.
+
+## Stricter EAT cost: every press restarts the cooldown (2026-11-03)
+
+`ZebrafishEnv(eat_press_resets_cooldown=True)` / `train_ppo.py --eat-press-resets-cooldown` (default off).
+Every EAT press restarts the cooldown, including presses made during it (`can_eat` is read before the
+restart, so a ready press can still eat). Holding EAT therefore strikes once, at the start of the hold,
+and eating needs a release of >= eat_cooldown followed by a tap. Implies the attempt rule. Run
+`eat_press_cost` (full observation, seed 0, 1M steps). Figures: `viz/compare_training.py --names
+ppo_logged eat_cost eat_press_cost --labels "no cost" "attempt cost" "press cost" --out eat_press_cost`.
+
+| run | starvation ends at | eval error (mean action) | eval glucose | eval attempt rate | eval strike rate (/s) | eval strike miss | train attempt rate (last 10) |
+|---|---|---|---|---|---|---|---|
+| no cost (`ppo_logged`) | ~49k steps | 3.7 | 50.7 | 0.46 | 0.93 | 0.83 | 0.47 |
+| attempt cost (`eat_cost`) | ~74k | 10.6 | 58.7 | 0.25 | 1.44 | 0.88 | 0.42 |
+| press cost (`eat_press_cost`) | ~131k | 6.9 | 55.3 | 0.26 | 1.86 | 0.91 | 0.29 |
+
+- **Baselines:** the scripted forager holds EAT whenever hungry, so under this rule it strikes once per
+  hungry spell (usually far from food) and never eats: starves in 30/30 eval episodes (0 pellets). Random
+  also starves (0.17 pellets). **Decision (2026-11-03): the scripted forager is dropped from the training
+  evaluation** (`train_ppo.py` now prints random / PPO only). Comparisons are between trained agents from
+  here on; `forage_action` stays only as the `viz/animate_env.py` demo of the movement repertoire. Its
+  numbers in earlier sections are historical. No tapping forager will be built.
+- **Learning is ~2x slower to stop starving** (~131k vs ~74k steps, ~16 vs ~9 rollouts); pellets eaten stay
+  near 0 for the first ~100k steps, then catch up. Final training homeostasis matches the other runs (no
+  starvation, ~19.7 pellets). Expected: the initial policy presses on ~50% of steps, and a strike needs
+  ~5 press-free steps first (~3% chance), so its own exploration noise keeps restarting the cooldown.
+- **It learned a can_eat-locked tap.** Probe (glucose 45, pellet straight ahead): P(EAT) with
+  can_eat = 1 / 0 is 0.84 / 0.20 in reach and 0.66 / 0.11 at d = 20 (the other runs do not gate on can_eat:
+  `ppo_logged` 0.90 / 0.94, `eat_cost` 0.94 / 0.79). So the mean-action policy presses as the flag turns on,
+  releases while it is off, and strikes once per cooldown: 1.86 strikes/s against the 2/s ceiling. The
+  observation flag supplies the timing the memoryless policy otherwise lacks. Hiding `can_eat` under this rule
+  would need the agent to time 0.5 s without memory, which a feedforward policy cannot (it would need
+  recurrence or a frame stack): a sharp test of whether `can_eat` is needed.
+- **Precision did not improve:** strike miss is 0.91 and with no food sensed P(EAT | ready) is 0.93, so it
+  taps whenever ready, not when in reach. Same reason as for the attempt cost: a miss only costs if a pellet
+  comes into reach within the next 0.5 s. Eval glucose overshoots (55 vs target 50), as with the attempt cost.
+- **Metrics:** strikes still equal `attempts & ready` (a ready step had no press for a cooldown; tested in
+  `test_metrics.py`). `eat_opportunities` / `eat_efficiency` assume one chance per cooldown of holding, but
+  a hold now has one chance in total, so under this rule they are loose upper bounds; use the strike metrics.
+- **dt:** the rule is physical (a press restarts a clock in seconds), but per-step exploration noise makes
+  random press-free 0.5 s windows rarer at smaller dt, so early learning may be slower at smaller dt.
+- Next options: `--eat-press-resets-cooldown --hide can_eat` (timing without the
+  flag); a per-miss reward penalty to target precision.
 
 ## Next step: 3d.2 make the task harder
 

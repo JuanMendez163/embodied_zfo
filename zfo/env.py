@@ -51,6 +51,9 @@ class ZebrafishEnv(gym.Env):
     agent must then infer the cooldown, or reachability from proximity and bearing).
     eat_attempt_resets_cooldown=True makes a failed EAT cost something: an attempt restarts the cooldown
     whether or not it eats (default False: only a successful eat does, as in GridWorld).
+    eat_press_resets_cooldown=True is the stricter cost: every press restarts the cooldown, including
+    presses made during it, so holding EAT strikes only once and eating needs a release then a tap
+    (implies the attempt rule).
     Reward: reduction in drive (distance from glucose_target) over the step, divided by reward_scale.
     glucose_start: None (start at glucose_target), a number, or a (low, high) range sampled uniformly
     at every reset.
@@ -67,7 +70,8 @@ class ZebrafishEnv(gym.Env):
                  turn_cost_rate=TURN_COST_RATE, move_cost_exponent=MOVE_COST_EXPONENT,
                  intake_amount=INTAKE_AMOUNT, starvation_threshold=STARVATION_THRESHOLD,
                  drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
-                 observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False, seed=None):
+                 observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False,
+                 eat_press_resets_cooldown=False, seed=None):
         super().__init__()
         self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance, seed=seed)
 
@@ -86,6 +90,7 @@ class ZebrafishEnv(gym.Env):
         self.mouth_angle = mouth_angle                      # full width of the mouth cone (rad)
         self.eat_cooldown = eat_cooldown                    # s between successful eats
         self.eat_attempt_resets_cooldown = eat_attempt_resets_cooldown   # True: failed attempts restart it too
+        self.eat_press_resets_cooldown = eat_press_resets_cooldown       # True: presses during it restart it too
 
         # metabolism (see metabolism.py; rates are placeholders until set from the literature)
         self.glucose_target = glucose_target
@@ -206,12 +211,16 @@ class ZebrafishEnv(gym.Env):
         (time_since_last_eat >= eat_cooldown) and nearest_food_in_reach finds a pellet in the
         mouth cone. A successful eat removes that pellet from the arena, counts it in
         total_eaten, and restarts the cooldown.
-        With eat_attempt_resets_cooldown, a failed attempt restarts the cooldown too.
+        With eat_attempt_resets_cooldown, a failed attempt restarts the cooldown too; with
+        eat_press_resets_cooldown, so does a press made during the cooldown.
         """
-        if eat_cmd <= EAT_THRESHOLD or not self.can_eat(): # no press, or a press during the cooldown (costs nothing)
+        if eat_cmd <= EAT_THRESHOLD: # no press
             return 0
-        if self.eat_attempt_resets_cooldown: # all eat attempts reset cooldown, even if it turns out not successful
-            self.time_since_last_eat = 0.0 
+        ready = self.can_eat()       # checked before any restart below
+        if self.eat_press_resets_cooldown or (ready and self.eat_attempt_resets_cooldown):
+            self.time_since_last_eat = 0.0   # the press costs a cooldown, whether or not it eats
+        if not ready:                # a press during the cooldown (free unless eat_press_resets_cooldown)
+            return 0
         food_index = nearest_food_in_reach(
             self.position, self.heading, self.arena.food_positions, self.eat_radius, self.mouth_angle)
         if food_index is None: # no food in reach

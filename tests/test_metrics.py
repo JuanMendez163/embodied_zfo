@@ -122,6 +122,19 @@ def test_strikes_are_ready_presses_when_attempts_restart_cooldown():
     assert m["eat_strikes"] == ready_presses
 
 
+def test_strikes_are_ready_presses_when_presses_restart_cooldown():
+    # with the stricter cost a ready step has had no press for a cooldown, so again every ready press
+    # is a counted strike; a sparse presser (p = 0.15) so ready presses are not rare
+    env = ZebrafishEnv(eat_press_resets_cooldown=True, seed=0)
+    env.reset(seed=0)
+    rng = np.random.default_rng(0)
+    infos = [env.step([rng.uniform(), rng.uniform(-1, 1), float(rng.uniform() < 0.15)])[4] for _ in range(600)]
+    ready_presses = sum(i["eat_attempted"] and i["eat_ready"] for i in infos)
+    m = episode_metrics(infos, env.dt, env.glucose_target, len(infos) * env.dt, env.eat_cooldown)
+    assert ready_presses > 10
+    assert m["eat_strikes"] == ready_presses
+
+
 def test_summarize_skips_labels_and_undefined_episodes():
     per_episode = stack_episodes([
         {"timestep": 100, "env": 0, "eat_efficiency": 0.5},
