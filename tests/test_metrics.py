@@ -103,6 +103,26 @@ def test_strike_that_eats_does_not_miss():
     assert m["eat_strikes"] == 1 and m["eat_strike_miss"] == 0.0
 
 
+def test_eat_between_counted_strikes_is_a_strike():
+    # no cost: a failed strike at t = 0 leaves the env ready, so a held EAT eats at step 3, inside the
+    # counter's cooldown; that eat is a strike and restarts the count (next strike COOLDOWN after it)
+    n = round(2 * COOLDOWN / DT)
+    eaten = [i == 3 for i in range(n)]
+    m = metrics(make_infos([True] * n, eaten=eaten))
+    strike_steps = [0, 3, 3 + round(COOLDOWN / DT)]
+    assert m["eat_strikes"] == len(strike_steps)
+    assert math.isclose(m["eat_strike_miss"], 1 - 1 / 3)
+
+
+def test_eat_on_re_press_inside_counted_cooldown_is_a_strike():
+    # no cost: tap at t = 0 (miss), release, tap again at step 2 and eat; the counter's clock alone
+    # would skip the second tap (2 steps < COOLDOWN), but an eat always counts
+    eat = [True, False, True] + [False] * 5
+    eaten = [False, False, True] + [False] * 5
+    m = metrics(make_infos(eat, eaten=eaten))
+    assert m["eat_strikes"] == 2 and m["eat_strike_miss"] == 0.5
+
+
 def test_no_strikes_gives_nan_miss_fraction():
     m = metrics(make_infos([True] * 4, ready=[False] * 4))   # held only during the cooldown
     assert m["eat_strikes"] == 0 and m["eat_strike_rate"] == 0.0

@@ -52,13 +52,14 @@ Note: a number of times the logger stores means of episode metrics across rollou
 **ENV NOTES**
 - We scale reward to put in order 1 (good for PPO)
 - Starting glucose can be a random number from (low, high) range
-- **Observation**: **(glucose/glucose_max, can_eat, proximity, cos(theta), sin(theta), in_reach)**
+- **Observation**: **(glucose/glucose_max, proximity, cos(theta), sin(theta))**
 	- proximity: 1 - (d/range), d is Euclidean distance to nearest food, range is sensing range (default arena diagonal, i.e. can sense entire arena)
 		- Why we use proximity: proximity=0 represents the weakest signal, while distance=0 represents the strongest signal. Distance's value has an inverse relationship to the importance to the network, which messes up PPO. A proximity of 0 corresponds to "nothing there," which corresponds to no signal in the network.
 		- Value rises as food gets closer
 	- theta: angle of nearest food relative to current heading, in range (-pi, pi). Egocentric direction
 		- We take cos(theta), sin(theta) to have a smooth representation of nearest food direction (i.e. angles near pi and -pi are actually quite similar directions but radically different values; taking cos/sin ensures a consistent representation)
 	- You can only sense food within sensing_range: relates to distance, i.e. can only sense food with distance < sensing_range
+	- **Previous version had in_reach and eat_ready included: now can hide with --hide flag. Not having these included doesn't change learning speed too much**
 - **Step:**
 	- 1. Store current glucose
 	- 2. Try eating (depends on cooldown, mouth in reach, and eat_cmd)

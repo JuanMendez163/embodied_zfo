@@ -24,9 +24,10 @@ _Last updated: 2026-11-03_
 | Learning curves (2026-10-30) | Done | `viz/plot_training.py`, run `ppo_logged` (same config as `ppo`, with `train_episodes.npz`). Episodes are grouped by the rollout they ended in (one policy version each). Starvation ends within ~6 of 123 rollouts (~49k env steps); after that survival is capped at 120 s, so later learning needs `glucose_target_error` or reward |
 | Observation-flag ablation (2026-11-02) | Done | `ZebrafishEnv(observe_can_eat=, observe_in_reach=)`, `train_ppo.py --hide`, runs `hide_can_eat`, `hide_in_reach`, `hide_both`; `viz/compare_training.py` (runs overlaid: survival / starved / eaten with the first-100k zoom, plus a `_homeostasis` figure of target error / EAT attempt rate; efficiency dropped as noise-dominated); results below |
 | Stricter EAT cost: every press restarts the cooldown (2026-11-03) | Done | `ZebrafishEnv(eat_press_resets_cooldown=True)`, `train_ppo.py --eat-press-resets-cooldown`, run `eat_press_cost`; results below |
+| EAT costs with both flags hidden (2026-11-03) | Done | runs `nocost_hide_both` (retrain of `hide_both` with strike metrics; reproduces it exactly), `eat_cost_hide_both`, `eat_press_cost_hide_both`; results below |
 | **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
 
-107 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+109 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -119,8 +120,8 @@ config without the cost). Figures: `viz/compare_training.py --names ppo_logged e
   strike restarted the cooldown (own clock + the env's `ready`), so it is dt-independent with or without the
   cost, and equals `attempts & ready` when the cost is on (tested). Both runs were retrained (same seed,
   CPU) to log them; every existing metric reproduced exactly.
-- **The cost raises strikes:** train (last 10 rollouts) 1.79/s vs 1.54/s, miss 0.908 vs 0.893; eval with
-  the mean action 1.44 vs 0.93/s. Scripted forager: 1.32 vs 0.76/s (failing keeps it hungry, so it holds
+- **The cost raises strikes:** train (last 10 rollouts) 1.79/s vs 1.65/s, miss 0.908 vs 0.900; eval with
+  the mean action 1.44 vs 1.06/s (no-cost values recounted 2026-11-03 with eats as strikes; were 1.54, 0.893, 0.93). Scripted forager: 1.32 vs 0.76/s (failing keeps it hungry, so it holds
   EAT more: attempt rate 0.62 vs 0.35). Reasons: a miss only costs if a pellet comes into reach within the
   next cooldown, so strikes far from food are free in practice (weak gradient; the slower approach targets
   the one part that does cost); and one press per 0.5 s window is enough to strike, so the cost agent's flat
@@ -143,7 +144,7 @@ ppo_logged eat_cost eat_press_cost --labels "no cost" "attempt cost" "press cost
 
 | run | starvation ends at | eval error (mean action) | eval glucose | eval attempt rate | eval strike rate (/s) | eval strike miss | train attempt rate (last 10) |
 |---|---|---|---|---|---|---|---|
-| no cost (`ppo_logged`) | ~49k steps | 3.7 | 50.7 | 0.46 | 0.93 | 0.83 | 0.47 |
+| no cost (`ppo_logged`) | ~49k steps | 3.7 | 50.7 | 0.46 | 1.06 | 0.86 | 0.47 |
 | attempt cost (`eat_cost`) | ~74k | 10.6 | 58.7 | 0.25 | 1.44 | 0.88 | 0.42 |
 | press cost (`eat_press_cost`) | ~131k | 6.9 | 55.3 | 0.26 | 1.86 | 0.91 | 0.29 |
 
@@ -156,7 +157,7 @@ ppo_logged eat_cost eat_press_cost --labels "no cost" "attempt cost" "press cost
 - **Learning is ~2x slower to stop starving** (~131k vs ~74k steps, ~16 vs ~9 rollouts); pellets eaten stay
   near 0 for the first ~100k steps, then catch up. Final training homeostasis matches the other runs (no
   starvation, ~19.7 pellets). Expected: the initial policy presses on ~50% of steps, and a strike needs
-  ~5 press-free steps first (~3% chance), so its own exploration noise keeps restarting the cooldown.
+  4 press-free steps first (0.5^4 ~ 6% at dt = 0.1), so its own exploration noise keeps restarting the cooldown.
 - **It learned a can_eat-locked tap.** Probe (glucose 45, pellet straight ahead): P(EAT) with
   can_eat = 1 / 0 is 0.84 / 0.20 in reach and 0.66 / 0.11 at d = 20 (the other runs do not gate on can_eat:
   `ppo_logged` 0.90 / 0.94, `eat_cost` 0.94 / 0.79). So the mean-action policy presses as the flag turns on,
@@ -174,6 +175,64 @@ ppo_logged eat_cost eat_press_cost --labels "no cost" "attempt cost" "press cost
   random press-free 0.5 s windows rarer at smaller dt, so early learning may be slower at smaller dt.
 - Next options: `--eat-press-resets-cooldown --hide can_eat` (timing without the
   flag); a per-miss reward penalty to target precision.
+
+## EAT costs with can_eat and in_reach both hidden (2026-11-03)
+
+Same three EAT rules, `--hide can_eat in_reach`, seed 0, 1M steps. `nocost_hide_both` is `hide_both`
+retrained to log strike metrics (every earlier metric reproduced exactly). Figures:
+`viz/compare_training.py --names nocost_hide_both eat_cost_hide_both eat_press_cost_hide_both --labels
+"no cost" "attempt cost" "press cost" --out eat_cost_hide_both`. Eval below uses **sampled** actions
+(30 episodes, `model.predict(deterministic=False)`, `set_random_seed(0)`); the mean action is misleading here
+(see the press-cost bullet).
+
+| run | flags | starvation ends at | error | eaten | attempt rate | strikes/s | strike miss |
+|---|---|---|---|---|---|---|---|
+| no cost (`ppo_logged`) | both | ~49k steps | 7.0 | 20.0 | 0.49 | 1.67 | 0.90 |
+| attempt cost (`eat_cost`) | both | ~74k | 6.6 | 19.5 | 0.44 | 1.79 | 0.91 |
+| press cost (`eat_press_cost`) | both | ~131k | 6.5 | 19.6 | 0.29 | 1.21 | 0.87 |
+| no cost (`nocost_hide_both`) | neither | ~57k | 6.1 | 19.6 | 0.73 | 1.91 | 0.91 |
+| attempt cost (`eat_cost_hide_both`) | neither | ~74k | 7.4 | 19.7 | 0.33 | 1.23 | 0.86 |
+| press cost (`eat_press_cost_hide_both`) | neither | **~172k** | 6.2 | 18.7 | 0.56 | **0.34** | **0.54** |
+
+- **Homeostasis is the same in every run** (sampled error 6.1-7.4, no starvation). The costs change how
+  the agent eats, not how well it regulates glucose. One seed each.
+- **Reach is still not learned** under either cost: with both flags hidden, P(EAT) is identical at d = 1.5,
+  1.9, 2.1 and 3 (pellet ahead), in all three runs. The open question from the ablation (can the reach
+  boundary be extracted from proximity and bearing?) is answered "no" for these costs at 1M steps.
+- **Attempt cost without flags: hunger-gated instead.** P(EAT), pellet ahead, glucose 35 / 45 / 55:
+  0.89 / 0.65 / 0.32 (no-food-sensed 0.10 / 0.02 / 0.00); the no-cost run is milder (0.63 / 0.51 / 0.38),
+  and with flags `eat_cost` is not glucose-gated at all (~0.94 at every glucose). Attempt rate 0.33 vs 0.73
+  without cost. Mean-action eval works for this run (error 4.2, best mean-action error of the cost runs).
+- **Press cost without flags: a stochastic tapper, broken under the mean action.** Mean-action eval:
+  0 pellets, glucose 12.7, error 37.8 (survives 120 s only because decay is slow). With P(EAT) > 0.5
+  the mean eat_cmd is above threshold, so the mean action holds EAT forever and the press rule never lets it
+  strike. Sampled actions supply the release gaps: without can_eat (and no memory) it cannot time a release,
+  so noise does it. **Evaluate press-cost runs without can_eat with sampled actions only.**
+- **Its low miss rate comes from bearing, through an inverted press rate.** P(EAT) by bearing (d = 10,
+  glucose 45): 0 deg 0.65, 30 deg 0.85, 60-90 deg 0.93, 135 deg 0.87, 180 deg 0.45; the no-cost and attempt-cost runs
+  are the reverse (highest ahead). Under the press rule a strike needs 4 press-free steps then a press, so
+  the per-step strike hazard is h(p) = p (1 - p)^4 (max at p = 0.2): h = 2e-5 at p = 0.93 vs 8e-3 at p = 0.65.
+  Pressing *more* while the pellet is off-axis keeps the cooldown pinned and suppresses strikes there,
+  so strikes land mostly with the pellet ahead (miss 0.54). Distance does not enter (d = 1.5 and 10 give the
+  same P), and it approaches slower than the no-cost run (move 0.65 vs 0.81 at d = 5). This is per-step
+  noise doing timing work, so it is tied to dt = 0.1 (the number of press-free steps per cooldown).
+- **Not converged:** in training, strike miss is still falling at 1M steps (~0.75 at 0.7M -> ~0.57), and the
+  attempt rate rises from ~0.3 to ~0.5 after ~0.6M while strikes fall (the strategy above taking over).
+- **Strike metric fix (2026-11-03), affects the no-cost rows only.** Under no cost a failed strike does not
+  restart the env's cooldown, so a held (or re-pressed) EAT can eat within eat_cooldown of a counted strike;
+  66-73% of no-cost eats landed on uncounted steps (30 sampled eval episodes), so eats were not a subset of
+  strikes and the old miss was slightly optimistic. `episode_metrics` now counts every eating step as a strike
+  and restarts the strike clock there (eats restart the env cooldown under every rule). Decision: the strike
+  metrics are **cost-rule accounting** (what pressing would cost if each strike were charged a cooldown); for
+  a no-cost run they are a counterfactual, comparable across rules, and its native precision measure is
+  `eat_out_of_reach` (fraction of EAT-held time). Cost-run values are unchanged (every eat was already a
+  strike; verified). `ppo_logged` and `nocost_hide_both` retrained (same seed): every non-strike metric
+  reproduced exactly. Strike rate can now exceed 1 / eat_cooldown slightly (an eat right after a miss).
+  Figures `compare_eat_cost*`, `compare_eat_press_cost*`, `compare_eat_cost_hide_both*` regenerated;
+  `compare_obs_flags*` not (its `hide_*` runs predate strike metrics).
+- Next options: train `eat_press_cost_hide_both` longer (e.g. 3M) to see where miss settles; give the
+  agent memory (frame stack or recurrent PPO) to test whether it then learns release-and-tap timing without
+  can_eat; several seeds for the hunger-gating and bearing-inversion findings.
 
 ## Next step: 3d.2 make the task harder
 
