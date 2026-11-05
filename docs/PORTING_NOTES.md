@@ -29,6 +29,7 @@ _Last updated: 2026-11-05_
 | 3d.2a Food regrowth (2026-11-03) | Done | `Arena(food_regrowth_interval=, max_food=)`, `Arena.regrow_food`, `Arena.sample_food_positions`, `ZebrafishEnv(food_regrowth_interval=)` (step 3, info `n_grown`), `train_ppo.py --food-regrowth-interval` (default 10 s), `tests/test_arena.py`, `tests/test_env.py`; section below |
 | Batched regrowth (2026-11-05) | Done | `Arena(food_per_regrowth=)`, `ZebrafishEnv(food_per_regrowth=)`, `train_ppo.py --food-per-regrowth` (default 1), `tests/test_arena.py`, `tests/test_train_ppo.py`; Food regrowth section |
 | 3d.2b 300 s episodes as default, first run (2026-11-03) | Done | `train_ppo.py` (`EPISODE_DURATION`, `--episode-duration`), run `default_300s`; section below |
+| Limited sensing range sweep (2026-11-05) | Done (first look) | `train_ppo.py --sensing-range` (`SENSING_RANGE`, default None = arena diagonal), runs `sense15`, `sense25`, `sense40`; section below |
 | **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
 119 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
@@ -358,6 +359,65 @@ episodes). Starvation ends at ~73k steps (as for `eat_cost_hide_both`). 30 eval 
   steps); check that the critic's value drops as food in the arena drops (it cannot see the count directly:
   with n_nearest = 1 it sees only the nearest pellet's distance, a weak proxy for food density); give the
   agent more of the food field (`n_nearest` > 1); several seeds.
+
+## Limited sensing range sweep (2026-11-05)
+
+`train_ppo.py --sensing-range R` (`SENSING_RANGE = None`: the arena diagonal, sees everything; saved in
+`env_kwargs.json`, 0 = None). **Choosing R:** along `default_300s` eval episodes the nearest pellet is
+within 5 units half the time; an agent with range R would see nothing for this share of the time:
+R = 10: 44% (22% in 0-100 s), 20: 29% (7%), 25: 24% (4%), 40: 15% (1%). So R = 20-30 keeps early
+foraging learnable and makes search matter once food is scarce. Runs `sense15`, `sense25`, `sense40` (all
+other settings default: flags hidden, attempt cost, regrowth 1 / 10 s, 300 s, seed 0, 1M steps).
+30 eval episodes (`figures/compare_sensing*.png`):
+
+| run | actions | starved | error | eaten | move | pellets left at 250-300 s | blind at 250-300 s |
+|---|---|---|---|---|---|---|---|
+| `default_300s` (R = 141) | mean | 0/30 | 10.6 | 48.4 | 0.54 | 0.9 | 22% (empty arena) |
+| | sampled | 0/30 | 11.2 | 48.3 | 0.55 | 0.9 | 20% |
+| `sense15` | mean | 0/30 | **6.5** | 36.9 | 0.32 | 12.9 | 38% |
+| | sampled | **8/30** | | | | 10.9 | 70% |
+| `sense25` | mean | 5/30 | 8.6 | 39.7 | 0.36 | 7.9 | 26% |
+| | sampled | 8/30 | | | | 6.4 | 45% |
+| `sense40` | mean | 0/30 | 7.1 | 40.7 | 0.27 | 9.2 | 5% |
+| | sampled | 4/30 | | | | 4.2 | 42% |
+
+- **The mean action looks better than full vision, but the policy as trained does not.** With mean
+  actions all three keep glucose near (just below) target all episode and never empty the arena, so the
+  error is lower than `default_300s`'s (which overeats early and runs out by ~200 s). With sampled actions
+  (as in training) all three starve in 4-8 of 30 episodes, late in the episode, and training episodes keep
+  starving to the end (R = 15 most, R = 40 least; `compare_sensing.png`); `default_300s` stops starving at
+  ~80k steps. The mean action again misrepresents the policy (cf. the press-cost runs).
+- **Leaving food is not rationing.** Glucose stays below target (eating would still raise reward), so these
+  agents eat ~0.13 pellets/s because they find food more slowly, not because they stop. Saving the arena is
+  a side effect of slow foraging.
+- **Blind search is the failure.** Sampled `sense15` is blind 70% of the last 50 s with ~11 pellets still
+  in the arena: it loses food it cannot see. A memoryless MLP sees [glucose, 0, 0, 0] at every blind
+  step, so its search is one fixed action per glucose level (mean `sense15`: |turn| 0.07, near-straight
+  lines; `sense40`: |turn| 0.55, circling).
+- `viz/animate_ppo.py` draws the sensing range as a faint disc around the agent (clipped to the walls;
+  hidden when the range is the full diagonal). Sampled `sense25`, seed 10000 starves at 191 s with 24 eaten
+  (`figures/ppo_sense25_seed10000_sampled_starved.mp4`): it ends circling at the right wall, blind, with 15 pellets
+  in the left half. **EAT panel (2026-11-05):** the policy's mean eat_cmd per step (`policy_gaussian` on
+  the recorded observations; draws no random numbers, so sampled episodes are unchanged) over the shaded
+  region above `EAT_THRESHOLD`; in sampled replays a right axis converts it to P(EAT held)
+  (`add_eat_probability_axis`, via `eat_probability`; exact because SB3's std is state-independent). Why:
+  sampled actions flip EAT ~5 times/s (median on 0.2 s, off 0.1 s) and the sampled eat_cmd spreads over 0-1,
+  so both the raw 0/1 trace and the raw eat_cmd fill the panel at video resolution; a 2 s held-fraction line
+  was tried and dropped (a time fraction on a command axis read as a command). What the agent did at each
+  step is in the arena (mouth cone, status text). `sense25`'s mean eat_cmd sits at 0.5-0.65, just above the
+  threshold; its eat std is 0.367 (physical units; SB3's logged `std` averages all three actions), so P(held)
+  ~ 0.58 at 0.57 (measured 55%): with in_reach hidden it leaves EAT to the noise.
+- **Starving episodes** (30 eval seeds): sampled `sense15` 10005 10006 10010 10013 10014 10017 10020 10028,
+  `sense25` 10000 10002 10004 10005 10008 10010 10021 10028, `sense40` 10010 10015 10022 10029; mean `sense25`
+  10005 10007 10012 10024 10028 (mean `sense15` / `sense40`: none). Rendered (median starvation time):
+  `ppo_sense15_seed10014_sampled_starved.mp4`, `ppo_sense25_seed10021_sampled_starved.mp4`,
+  `ppo_sense40_seed10022_sampled_starved.mp4`, `ppo_sense25_seed10005_starved.mp4` (mean). `animate_ppo.py` now
+  appends `_starved` to the file name when the episode ends in starvation (`save_animation(starved=)`). **All four die the same way: with 13-16 pellets in the arena, blind
+  84-100% of the last 60 s, a third to half of it within 3 units of a wall**; the nearest pellet at death is
+  47-51 away for R = 25 / 40 (sense15's has just come into range at 8, too late). Starvation is a search
+  failure, not food scarcity.
+- Next options: more seeds per R (one seed each so far); memory (frame stacking or a recurrent policy) so
+  search can use history; a "nothing sensed" flag.
 
 ## Next step: 3d.2 make the task harder
 

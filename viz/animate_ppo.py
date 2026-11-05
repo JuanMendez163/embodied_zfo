@@ -1,15 +1,18 @@
 """
 Video of a trained PPO agent (runs/NAME/model.zip) in one evaluation episode: the agent in the arena
-(left), its glucose trace (right, top) and when it holds EAT (right, bottom; move and turn commands are
-in the status text under the arena).
+(left), its glucose trace (right, top) and its EAT command (right, bottom: the policy's mean eat_cmd at
+each step against the shaded EAT region above EAT_THRESHOLD, with, for --sampled, a right axis giving the
+probability that the sampled command holds EAT; move and turn commands are in the status text under the arena).
+What the agent actually did at each step is in the arena: the mouth cone and the status text.
 Run with: python viz/animate_ppo.py [--name ppo] [--seed 10000] [--sampled]
-(saves figures/ppo_NAME_seedSEED.mp4, or ppo_NAME_seedSEED_sampled.mp4)
+(saves figures/ppo_NAME_seedSEED.mp4; _sampled is added with --sampled, _starved if the agent starves)
 
 The episode is the same one training.metrics.evaluate runs for that seed (make_ppo_env, deterministic
 actions), and its episode_metrics are printed. --sampled draws actions from the policy's Gaussian instead,
 as in training (sampler seeded with the episode seed, so the video is reproducible); use it when the mean
 action misrepresents the policy (e.g. a press-cost run without can_eat, whose mean action holds EAT forever). The policy only sees the observation; env state is
 read for drawing only. The mouth cone is drawn darker while EAT is held and flashes on a successful eat.
+A faint disc around the agent shows its sensing range (only for runs with a range shorter than the arena).
 Notebooks use load_model, make_animation and save_animation directly (notebooks/ppo_analysis.ipynb).
 """
 
@@ -21,16 +24,39 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FFMpegWriter, FuncAnimation
 from matplotlib.collections import LineCollection
-from matplotlib.patches import Circle, Wedge
+from matplotlib.patches import Circle, Rectangle, Wedge
 from stable_baselines3 import PPO
 
+from zfo.env import EAT_THRESHOLD
+
 from training.metrics import EVAL_SEED, episode_metrics
+from training.probe import eat_probability, policy_gaussian
 from training.train_ppo import RUNS_DIR, load_env_kwargs, make_ppo_env
 from viz.style import AGENT, EAT_MARK, FIGURES_DIR, FOOD, SURFACE, TEXT, TEXT_MUTED, TURN, style_trace
 
 FPS = 30              # 3x real time at dt = 0.1
 TRAIL = 50            # past steps shown behind the agent
 CONE_ALPHA = {"idle": 0.12, "held": 0.35, "eaten": 0.8}
+P_HELD_TICKS = [0.1, 0.25, 0.5, 0.75, 0.9]   # right-axis ticks of the EAT panel in sampled replays (eat std
+                                             # ~0.35 puts the panel's 0-1 command range at P ~ 0.07-0.93)
+
+
+def add_eat_probability_axis(ax, std_eat):
+    """
+    Right-hand axis on the eat_cmd panel ax giving P(EAT held) for each mean eat_cmd: the chance that a
+    command sampled from N(mean, std_eat) exceeds EAT_THRESHOLD (training.probe.eat_probability). Exact
+    because SB3's std does not depend on the state, so the mean alone sets the probability. The inverse is
+    interpolated on a grid (no scipy). Returns the secondary axis.
+    """
+    grid = np.linspace(-1.0, 2.0, 3001)                 # eat_cmd values, wider than the panel
+    p_grid = eat_probability(grid, std_eat)             # increasing in eat_cmd
+    to_p = lambda cmd: np.interp(cmd, grid, p_grid)
+    to_cmd = lambda p: np.interp(p, p_grid, grid)
+    right = ax.secondary_yaxis("right", functions=(to_p, to_cmd))
+    right.set_yticks(P_HELD_TICKS)
+    right.tick_params(labelsize=8, colors=TEXT_MUTED)
+    right.set_ylabel("P(EAT held)", fontsize=9, color=TEXT_MUTED)
+    return right
 
 
 def simulate(model, seed, env_kwargs=None, sampled=False):
@@ -38,6 +64,7 @@ def simulate(model, seed, env_kwargs=None, sampled=False):
     One episode of the policy on make_ppo_env(**env_kwargs), reset with seed: mean actions, or actions
     sampled from the policy's Gaussian if sampled (sampler seeded with seed).
     Returns the unwrapped env, per-step frames for drawing, and the step infos (for episode_metrics).
+    Each frame after the first keeps "obs", the observation its action was chosen from.
     """
     env = make_ppo_env(**(env_kwargs or {}))
     obs, info = env.reset(seed=seed)
@@ -50,9 +77,10 @@ def simulate(model, seed, env_kwargs=None, sampled=False):
     infos, done = [], False
     while not done:
         action, _ = model.predict(obs, deterministic=not sampled)
+        chosen_from = obs
         obs, _, terminated, truncated, info = env.step(action)
         infos.append(info)
-        frames.append({"t": info["time"], "position": base.position.copy(), "heading": base.heading,
+        frames.append({"obs": chosen_from, "t": info["time"], "position": base.position.copy(), "heading": base.heading,
                        "glucose": info["glucose"], "food": base.arena.food_positions.copy(),
                        "action": info["action"], "eat_held": info["eat_attempted"],
                        "eaten": info["n_eaten"] > 0})
@@ -78,7 +106,10 @@ def make_animation(model, name, seed, sampled=False):
 
     times = np.array([f["t"] for f in frames])
     glucose = np.array([f["glucose"] for f in frames])
-    eat_held = np.array([f["eat_held"] for f in frames], dtype=float)
+    # the policy's mean eat_cmd for each step's observation (one batch; draws no random numbers), clipped to
+    # the command range for display; frame 0 has no action
+    mean_actions, action_std = policy_gaussian(model, env, np.array([f["obs"] for f in frames[1:]]))
+    eat_mean = np.concatenate([[np.nan], np.clip(mean_actions[:, 2], 0.0, 1.0)])
     eaten = np.array([f["eaten"] for f in frames])
 
     fig = plt.figure(figsize=(13, 6.2), facecolor=SURFACE)
@@ -99,6 +130,12 @@ def make_animation(model, name, seed, sampled=False):
     ax_arena.add_collection(trail)
     cone = Wedge((0, 0), env.eat_radius, 0, 0, facecolor=AGENT, edgecolor=AGENT, zorder=3)
     body = Circle((0, 0), env.body_radius, color=AGENT, zorder=4)
+    # sensing range: pellets outside this disc give a zero observation; drawn only when it is shorter than
+    # the arena diagonal (the default sees everything), and clipped to the walls
+    sensing = Circle((0, 0), env.sensing_range, facecolor=AGENT, edgecolor=AGENT, alpha=0.07, linewidth=1,
+                     zorder=1, visible=env.sensing_range < math.hypot(*env.arena.size))
+    ax_arena.add_patch(sensing)
+    sensing.set_clip_path(Rectangle((0, 0), env.arena.width, env.arena.height, transform=ax_arena.transData))
     ax_arena.add_patch(cone)
     ax_arena.add_patch(body)
     (heading_line,) = ax_arena.plot([], [], color=TEXT, linewidth=1.5, zorder=5)
@@ -120,14 +157,19 @@ def make_animation(model, name, seed, sampled=False):
     ax_g.legend(loc="upper right", frameon=False, fontsize=8, labelcolor=TEXT_MUTED)
     cursor_g = ax_g.axvline(0, color=TEXT_MUTED, linewidth=0.8)
 
-    # --- EAT trace: 1 while eat_cmd > EAT_THRESHOLD (move and turn are in the status text) ---
+    # --- EAT trace: the policy's mean eat_cmd over the shaded EAT region (eat_cmd > EAT_THRESHOLD); with
+    # sampled actions, a right axis converts it to P(EAT held) (move and turn are in the status text) ---
     ax_c = fig.add_subplot(grid[1, 1], sharex=ax_g)
     style_trace(ax_c, duration)
-    ax_c.set_ylim(-0.1, 1.1)
-    ax_c.set_yticks([0, 1], ["off", "held"])
+    ax_c.set_ylim(-0.05, 1.05)
+    ax_c.set_yticks([0, EAT_THRESHOLD, 1])
+    ax_c.axhspan(EAT_THRESHOLD, 1.05, color=EAT_MARK, alpha=0.08, linewidth=0)
+    ax_c.axhline(EAT_THRESHOLD, color=TEXT_MUTED, linestyle="--", linewidth=0.8)
     ax_c.set_xlabel("time (s)", fontsize=9, color=TEXT_MUTED)
-    ax_c.set_ylabel("EAT", fontsize=9, color=TEXT_MUTED)
-    (eat_line,) = ax_c.plot([], [], color=EAT_MARK, linewidth=1.5, drawstyle="steps-post")
+    ax_c.set_ylabel("mean eat_cmd", fontsize=9, color=TEXT_MUTED)
+    (eat_line,) = ax_c.plot([], [], color=EAT_MARK, linewidth=1.5)
+    if sampled:     # with mean actions every step is held or not, so there is no probability to show
+        add_eat_probability_axis(ax_c, action_std[2])
     cursor_c = ax_c.axvline(0, color=TEXT_MUTED, linewidth=0.8)
 
     fig.suptitle(f"PPO agent '{name}' ({'sampled' if sampled else 'mean'} actions), "
@@ -150,6 +192,7 @@ def make_animation(model, name, seed, sampled=False):
         cone.set_theta2(heading_deg + half_mouth)
         cone.set_alpha(CONE_ALPHA["eaten" if frame["eaten"] else "held" if frame["eat_held"] else "idle"])
         body.center = (x, y)
+        sensing.center = (x, y)
         tip = frame["position"] + 2.5 * env.body_radius * np.array([math.cos(frame["heading"]),
                                                                     math.sin(frame["heading"])])
         heading_line.set_data([x, tip[0]], [y, tip[1]])
@@ -161,29 +204,31 @@ def make_animation(model, name, seed, sampled=False):
         shown = eaten[:i + 1]
         eat_marks.set_offsets(np.column_stack([times[:i + 1][shown], glucose[:i + 1][shown]]) if shown.any()
                               else np.zeros((0, 2)))
-        eat_line.set_data(times[1:i + 1], eat_held[1:i + 1])
+        eat_line.set_data(times[1:i + 1], eat_mean[1:i + 1])
         cursor_g.set_xdata([frame["t"], frame["t"]])
         cursor_c.set_xdata([frame["t"], frame["t"]])
-        return (food, trail, cone, body, heading_line, status, glucose_line, eat_marks, eat_line, cursor_g,
-                cursor_c)
+        return (sensing, food, trail, cone, body, heading_line, status, glucose_line, eat_marks, eat_line,
+                cursor_g, cursor_c)
 
     anim = FuncAnimation(fig, update, frames=len(frames), blit=True)
     return fig, anim, metrics
 
 
-def save_animation(anim, name, seed, sampled=False):
+def save_animation(anim, name, seed, sampled=False, starved=False):
     """
-    Saves anim as figures/ppo_NAME_seedSEED.mp4 (ppo_NAME_seedSEED_sampled.mp4 if sampled) and returns the path.
+    Saves anim as figures/ppo_NAME_seedSEED[_sampled][_starved].mp4 and returns the path: _sampled if actions
+    were sampled, _starved if the episode ended in starvation (pass metrics["starved"] from make_animation).
     """
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}{'_sampled' if sampled else ''}.mp4")
+    suffix = ("_sampled" if sampled else "") + ("_starved" if starved else "")
+    out = os.path.join(FIGURES_DIR, f"ppo_{name}_seed{seed}{suffix}.mp4")
     anim.save(out, writer=FFMpegWriter(fps=FPS), dpi=110, savefig_kwargs={"facecolor": SURFACE})
     return out
 
 
 def main(name, seed, sampled=False):
     _, anim, metrics = make_animation(load_model(name), name, seed, sampled)
-    out = save_animation(anim, name, seed, sampled)
+    out = save_animation(anim, name, seed, sampled, starved=bool(metrics["starved"]))
     print(f"saved {out}")
     print("  " + ", ".join(f"{k}={v:.3f}" for k, v in metrics.items()))
 

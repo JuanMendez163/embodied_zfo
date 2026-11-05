@@ -32,7 +32,8 @@ def test_default_run_hides_flags_with_attempt_cost():
     kwargs = run_env_kwargs()
     assert kwargs == {"observe_can_eat": False, "observe_in_reach": False,
                       "eat_attempt_resets_cooldown": True, "eat_press_resets_cooldown": False,
-                      "food_regrowth_interval": 10.0, "food_per_regrowth": 1, "episode_duration": 300.0}
+                      "food_regrowth_interval": 10.0, "food_per_regrowth": 1, "sensing_range": None,
+                      "episode_duration": 300.0}
     env = make_ppo_env(**kwargs)
     assert env.observation_space.shape == (4,)      # glucose, proximity, cos, sin
     assert env.unwrapped.max_steps == round(300.0 / env.unwrapped.dt)
@@ -40,10 +41,13 @@ def test_default_run_hides_flags_with_attempt_cost():
 
 def test_run_env_kwargs_options():
     assert run_env_kwargs(hide=[], eat_cost="none", food_regrowth_interval=0, episode_duration=120.0,
-                          food_per_regrowth=3) == {
+                          food_per_regrowth=3, sensing_range=25.0) == {
         "observe_can_eat": True, "observe_in_reach": True,
         "eat_attempt_resets_cooldown": False, "eat_press_resets_cooldown": False,
-        "food_regrowth_interval": None, "food_per_regrowth": 3, "episode_duration": 120.0}
+        "food_regrowth_interval": None, "food_per_regrowth": 3, "sensing_range": 25.0,
+        "episode_duration": 120.0}
+    assert run_env_kwargs(sensing_range=0)["sensing_range"] is None     # 0 = sees everything
+    assert make_ppo_env(**run_env_kwargs(sensing_range=25.0)).unwrapped.sensing_range == 25.0
     assert run_env_kwargs(hide=["in_reach"], eat_cost="press")["eat_press_resets_cooldown"]
     with pytest.raises(ValueError):
         run_env_kwargs(eat_cost="free")
