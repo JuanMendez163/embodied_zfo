@@ -2,13 +2,13 @@
 Learning curves of several training runs on shared axes (runs/NAME/train_episodes.npz each), e.g. the
 observation-flag ablation.
 Run with: python viz/compare_training.py --names RUN ... [--labels LABEL ...] [--zoom N] [--out NAME]
-(saves figures/compare_OUT.png and figures/compare_OUT_homeostasis.png)
+(saves figures/compare_OUT.png and figures/compare_OUT_eat.png)
 
-compare_OUT.png: survival time, fraction of episodes starved, pellets eaten. Top row: the whole run;
-bottom row: the first --zoom env steps, with the rollout boundaries (one PPO update each), to count how
-many updates a run needed.
-compare_OUT_homeostasis.png: glucose target error, EAT attempt rate, strike rate and strike miss fraction
-(strikes: presses with the cooldown passed, counted as if each restarted the cooldown; see
+compare_OUT.png: survival time, fraction of episodes starved, pellets eaten, glucose target error. Top row:
+the whole run; bottom row: the first --zoom env steps, with the rollout boundaries (one PPO update each), to
+count how many updates a run needed (--zoom 0 leaves this row out).
+compare_OUT_eat.png (named compare_OUT_homeostasis.png before 2026-11-05, when it also held the target
+error): EAT attempt rate, strike rate and strike miss fraction (strikes: presses with the cooldown passed, counted as if each restarted the cooldown; see
 training/metrics.py), whole run only. Runs trained before the strike metrics existed lack those panels'
 data and are skipped there. (EAT efficiency is left out: on training episodes, sampled EAT flickers into
 short bouts, so it is noise-dominated; see docs/PORTING_NOTES.md.)
@@ -20,19 +20,31 @@ import argparse
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 from training.train_ppo import N_ENVS
 from viz.plot_training import STEPS_PER_ROLLOUT, load_train_episodes, plot_learning_curve
 from viz.style import FIGURES_DIR, RUN_COLORS, TEXT_MUTED
 
 # (episode_metrics key, y label, y scale)
-SURVIVAL_METRICS = [("time", "survival time (s)", "linear"),
-                    ("starved", "fraction of episodes starved", "linear"),
-                    ("total_eaten", "pellets eaten", "linear")]
-HOMEOSTASIS_METRICS = [("glucose_target_error", "glucose target error (log)", "log"),
-                       ("eat_attempt_rate", "EAT attempt rate (fraction of time held)", "linear"),
-                       ("eat_strike_rate", "strikes per s alive", "linear"),
-                       ("eat_strike_miss", "fraction of strikes that miss", "linear")]
+OUTCOME_METRICS = [("time", "survival time (s)", "linear"),
+                   ("starved", "fraction of episodes starved", "linear"),
+                   ("total_eaten", "pellets eaten", "linear"),
+                   ("glucose_target_error", "glucose target error (log axis)", "log")]
+EAT_METRICS = [("eat_attempt_rate", "EAT attempt rate (fraction of time held)", "linear"),
+               ("eat_strike_rate", "strikes per s alive", "linear"),
+               ("eat_strike_miss", "fraction of strikes that miss", "linear")]
+
+
+def set_y_scale(ax, yscale):
+    """
+    Set ax's y scale; on a log scale, label ticks as plain numbers (6, 10, 40) instead of 6x10^0, 4x10^1.
+    """
+    ax.set_yscale(yscale)
+    if yscale == "log":
+        plain = FuncFormatter(lambda value, _: f"{value:g}")
+        ax.yaxis.set_major_formatter(plain)
+        ax.yaxis.set_minor_formatter(plain)
 
 
 def plot_comparison(runs, metrics, zoom=None):
@@ -53,7 +65,7 @@ def plot_comparison(runs, metrics, zoom=None):
                     continue
                 plot_learning_curve(axes[row, col], episodes, key, ylabel, xmax=xmax, color=color,
                                     label=label, dots=False)
-            axes[row, col].set_yscale(yscale)
+            set_y_scale(axes[row, col], yscale)
     axes[0, 0].legend(frameon=False, fontsize=9)
     if zoom is not None:
         axes[1, 0].set_title(f"first {zoom:,} steps; vertical lines = rollout boundaries "
@@ -67,7 +79,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--names", nargs="+", required=True, help="runs/NAME directories to compare")
     parser.add_argument("--labels", nargs="+", help="legend labels, one per name (default: the names)")
-    parser.add_argument("--zoom", type=int, default=100_000, help="env steps shown in the zoomed row")
+    parser.add_argument("--zoom", type=int, default=100_000,
+                        help="env steps shown in the zoomed row (0: no zoomed row)")
     parser.add_argument("--out", default="runs", help="figure names: figures/compare_OUT*.png")
     args = parser.parse_args()
     labels = args.labels or args.names
@@ -76,8 +89,8 @@ if __name__ == "__main__":
 
     runs = {label: load_train_episodes(name) for label, name in zip(labels, args.names)}
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    for suffix, fig in [("", plot_comparison(runs, SURVIVAL_METRICS, args.zoom)),
-                        ("_homeostasis", plot_comparison(runs, HOMEOSTASIS_METRICS))]:
+    for suffix, fig in [("", plot_comparison(runs, OUTCOME_METRICS, args.zoom or None)),
+                        ("_eat", plot_comparison(runs, EAT_METRICS))]:
         path = FIGURES_DIR / f"compare_{args.out}{suffix}.png"
         fig.savefig(path, dpi=150)
         print(f"saved {path}")

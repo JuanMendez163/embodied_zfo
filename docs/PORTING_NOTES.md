@@ -416,6 +416,12 @@ other settings default: flags hidden, attempt cost, regrowth 1 / 10 s, 300 s, se
   84-100% of the last 60 s, a third to half of it within 3 units of a wall**; the nearest pellet at death is
   47-51 away for R = 25 / 40 (sense15's has just come into range at 8, too late). Starvation is a search
   failure, not food scarcity.
+- **Training curves** (`figures/compare_sense15_vs_full.png`, `compare_training.py --zoom 0`): `sense15`'s
+  training starvation falls in every 200k block (0.96, 0.64, 0.59, 0.48, 0.29; eval sampled 8/30) and pellets
+  eaten still rise at 1M: not converged. `sense25` worsens late (0.21 -> 0.43), `sense40` reaches 0.06, full
+  vision 0 from 200k. Training (sampled) target error is higher for `sense15` than full vision (~15-30 vs ~10,
+  closing by 1M), the reverse of the mean-action evaluation. `compare_OUT.png` now holds the target error
+  (4th panel); the EAT panels moved to `compare_OUT_eat.png` (was `_homeostasis`).
 - Next options: more seeds per R (one seed each so far); memory (frame stacking or a recurrent policy) so
   search can use history; a "nothing sensed" flag.
 
