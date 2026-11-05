@@ -14,9 +14,11 @@ Within a step, in order:
  1. eat:    if eat_cmd > EAT_THRESHOLD, the cooldown has passed and a pellet is in the mouth cone,
             eat the nearest one (at the pose the agent observed when it chose to eat)
  2. move:   step_pose with (move_cmd, turn_cmd)
- 3. glucose: update_glucose over dt (decay, movement and turning cost, intake)
- 4. reward: drive_reward(glucose before, glucose after) / reward_scale, as in the Gutkin paper / GridWorld
- 5. end:    terminated when starved (glucose == 0), truncated at the episode time limit
+ 3. regrow: Arena.regrow_food over dt (food_per_regrowth pellets every food_regrowth_interval s, up to max_food,
+            away from the agent's new position); off by default
+ 4. glucose: update_glucose over dt (decay, movement and turning cost, intake)
+ 5. reward: drive_reward(glucose before, glucose after) / reward_scale, as in the Gutkin paper / GridWorld
+ 6. end:    terminated when starved (glucose == 0), truncated at the episode time limit
 
 All rates are in seconds; dt only sets how finely time is sampled.
 """
@@ -51,6 +53,8 @@ class ZebrafishEnv(gym.Env):
     agent must then infer the cooldown, or reachability from proximity and bearing).
     eat_attempt_resets_cooldown=True makes a failed EAT cost something: an attempt restarts the cooldown
     whether or not it eats (default False: only a successful eat does, as in GridWorld).
+    food_regrowth_interval (s, default None = off) grows food_per_regrowth pellets (default 1), placed
+    uniformly, every interval seconds, never past max_food (default n_food); see Arena.regrow_food.
     eat_press_resets_cooldown=True is the stricter cost: every press restarts the cooldown, including
     presses made during it, so holding EAT strikes only once and eating needs a release then a tap
     (implies the attempt rule).
@@ -62,7 +66,7 @@ class ZebrafishEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, arena_size=(100.0, 100.0), n_food=20, food_min_distance=10.0,
-                 dt=0.1, episode_duration=120.0,
+                 food_regrowth_interval=None, food_per_regrowth=1, max_food=None, dt=0.1, episode_duration=120.0,
                  max_speed=10.0, max_turn_rate=math.pi, body_radius=1.0, start_margin=5.0,
                  eat_radius=2.0, mouth_angle=math.radians(90), eat_cooldown=EAT_COOLDOWN,
                  glucose_target=GLUCOSE_TARGET, glucose_max=GLUCOSE_MAX, glucose_start=None,
@@ -73,7 +77,9 @@ class ZebrafishEnv(gym.Env):
                  observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False,
                  eat_press_resets_cooldown=False, seed=None):
         super().__init__()
-        self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance, seed=seed)
+        self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance,
+                           food_regrowth_interval=food_regrowth_interval, food_per_regrowth=food_per_regrowth,
+                           max_food=max_food, seed=seed)
 
         # time
         self.dt = dt                                        # s per step
@@ -172,7 +178,10 @@ class ZebrafishEnv(gym.Env):
             self.arena.size, self.body_radius)
         self.heading = float(self.heading)
 
-        # 3. glucose over this step
+        # 3. regrow food (nothing happens, and no random numbers are drawn, when regrowth is off)
+        n_grown = self.arena.regrow_food(self.dt, avoid=self.position)
+
+        # 4. glucose over this step
         self.glucose = update_glucose(
             self.glucose, move_cmd, turn_cmd, n_eaten, self.dt, decay_rate=self.decay_rate,
             move_cost_rate=self.move_cost_rate, turn_cost_rate=self.turn_cost_rate,
@@ -180,12 +189,12 @@ class ZebrafishEnv(gym.Env):
             glucose_max=self.glucose_max, starvation_threshold=self.starvation_threshold)
         self.time_since_last_eat += self.dt # keeping track of eating cooldown
 
-        # 4. reward: reduction in drive (no separate starvation penalty, as in GridWorld)
+        # 5. reward: reduction in drive (no separate starvation penalty, as in GridWorld)
         # we scale by reward_scale to put in order 1 for PPO
         reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n,
                               self.drive_m) / self.reward_scale
 
-        # 5. episode end
+        # 6. episode end
         self.step_count += 1
         terminated = self.glucose == 0.0
         truncated = not terminated and self.step_count >= self.max_steps
@@ -197,6 +206,7 @@ class ZebrafishEnv(gym.Env):
             "eat_ready": eat_ready,                 # cooldown had passed at the start of the step
             "food_in_reach": food_in_reach,         # a pellet was in the mouth cone at the start of the step
             "n_eaten": n_eaten,
+            "n_grown": n_grown,                     # pellets that grew this step (after the move)
             "hit_wall": hit_wall,
             "end_reason": "starved" if terminated else "time limit" if truncated else None,
         })

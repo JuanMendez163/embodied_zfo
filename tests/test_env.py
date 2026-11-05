@@ -186,6 +186,23 @@ def test_tap_after_release_eats_when_presses_restart_cooldown():
     assert env.step(EAT)[4]["n_eaten"] == 1
 
 
+def test_eaten_food_regrows_at_the_next_interval():
+    env = env_with_pellet_ahead(food_regrowth_interval=10.0, max_food=1)
+    infos = [env.step(EAT)[4]]             # eats the only pellet at t = 0
+    infos += [env.step(IDLE)[4] for _ in range(149)]
+    grown_at = [info["time"] for info in infos if info["n_grown"]]
+    assert infos[0]["n_eaten"] == 1
+    assert np.allclose(grown_at, [10.0])   # the 10 s tick refills it; by 15 s the arena is full again
+    assert env.arena.num_food == 1
+
+
+def test_no_regrowth_by_default():
+    env = env_with_pellet_ahead()
+    env.step(EAT)
+    assert all(env.step(IDLE)[4]["n_grown"] == 0 for _ in range(50))
+    assert env.arena.num_food == 0
+
+
 def test_info_food_in_reach_follows_mouth_cone():
     env = env_with_pellet_ahead()
     env.heading = math.pi                  # pellet now behind

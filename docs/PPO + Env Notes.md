@@ -69,4 +69,5 @@ Note: a number of times the logger stores means of episode metrics across rollou
 	- 6. Update step count, check for starvation / time limit, return observation
 - Glucose half life: the time in seconds it takes for glucose to halve with no food and swimming. This sets the exponential decay constant for the glucose dynamics. A value to research in the literature
 - ![[glucose_dynamics.png]]
-- 
+
+- **Food regrowth:** 1 pellet every x seconds, random location (uniform)

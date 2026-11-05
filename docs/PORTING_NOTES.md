@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-11-03_
+_Last updated: 2026-11-05_
 
 ## Status
 
@@ -26,9 +26,12 @@ _Last updated: 2026-11-03_
 | Stricter EAT cost: every press restarts the cooldown (2026-11-03) | Done | `ZebrafishEnv(eat_press_resets_cooldown=True)`, `train_ppo.py --eat-press-resets-cooldown`, run `eat_press_cost`; results below |
 | EAT costs with both flags hidden (2026-11-03) | Done | runs `nocost_hide_both` (retrain of `hide_both` with strike metrics; reproduces it exactly), `eat_cost_hide_both`, `eat_press_cost_hide_both`; results below |
 | New training defaults: flags hidden + attempt cost (2026-11-03) | Done | `training/train_ppo.py` (`HIDE_FLAGS`, `EAT_COST`, `run_env_kwargs`, `--eat-cost`), `tests/test_train_ppo.py`; decision below |
-| **3d.2 Make the task harder (food ceiling first)** | **Next** | `zfo/arena.py`, `zfo/env.py` |
+| 3d.2a Food regrowth (2026-11-03) | Done | `Arena(food_regrowth_interval=, max_food=)`, `Arena.regrow_food`, `Arena.sample_food_positions`, `ZebrafishEnv(food_regrowth_interval=)` (step 3, info `n_grown`), `train_ppo.py --food-regrowth-interval` (default 10 s), `tests/test_arena.py`, `tests/test_env.py`; section below |
+| Batched regrowth (2026-11-05) | Done | `Arena(food_per_regrowth=)`, `ZebrafishEnv(food_per_regrowth=)`, `train_ppo.py --food-per-regrowth` (default 1), `tests/test_arena.py`, `tests/test_train_ppo.py`; Food regrowth section |
+| 3d.2b 300 s episodes as default, first run (2026-11-03) | Done | `train_ppo.py` (`EPISODE_DURATION`, `--episode-duration`), run `default_300s`; section below |
+| **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
-111 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+119 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -287,6 +290,74 @@ limited sensing, memory) can build on it. Its equivalent run is `eat_cost_hide_b
   (`ppo_logged`): `--hide --eat-cost none`.
 - Careful: `--name` still defaults to `ppo`, so a run without `--name` overwrites `runs/ppo` (the first run,
   old configuration).
+
+## Food regrowth (2026-11-03)
+
+**Decision:** a deterministic timer, not a stochastic rate (asked for "a pellet respawns every 10 seconds").
+`Arena(food_regrowth_interval=S, max_food=M)`: one pellet grows at t = S, 2S, ... since the episode began,
+placed like the reset food (uniform, `food_wall_margin` from the walls, `food_min_distance` from the agent's
+position after the move, so nothing appears in the mouth). A tick that finds the arena at `max_food`
+(default `n_food`) grows nothing and is not saved for later. Called from `ZebrafishEnv.step` as step 3
+(eat -> move -> regrow -> glucose -> reward -> end); info `n_grown`.
+- **dt:** the clock subtracts the interval instead of restarting at 0, so there are exactly 120 / S ticks per
+  120 s at any dt, each on the first step that reaches it (at most one step late when dt does not divide S);
+  tested at dt = 0.1, 0.02, 0.3.
+- **Replay:** `food_regrowth_interval=None` (the env default) returns before touching `np_random`, and
+  `spawn_food` was refactored into `sample_food_positions` with the same draw order; `ppo_logged` and
+  `eat_cost_hide_both` re-evaluate to identical `eval.npz` arrays.
+- **Training default:** `FOOD_REGROWTH_INTERVAL = 10.0` (`run_env_kwargs`, `--food-regrowth-interval`, 0 = off),
+  i.e. 0.1 pellets/s. Scale: staying at target needs ~0.13-0.15 pellets/s (basal ln2/30 * 50 = 1.16 glucose/s
+  plus swimming, / 10 per pellet), ~17 pellets per 120 s. So regrowth alone is below the need: food becomes
+  limiting only once the initial 20 are used up.
+- **First check (no training):** the default-config agent `eat_cost_hide_both` (trained without regrowth),
+  mean action, 30 eval episodes: eaten 18.1 -> 18.3, error 4.18 -> 4.00, with regrowth on. **In 120 s episodes
+  the ceiling hardly binds**: this agent eats its need (~18) and rarely empties the arena; the ceiling mostly
+  cut off the end of episodes (e.g. `eat_cost`'s mean action overeats and emptied the arena by ~96 s). To make
+  food supply matter, lengthen episodes (supply 20 + 0.1 * T vs need ~0.14 * T: equal at T ~ 500 s) or
+  lower n_food.
+- **Batches (2026-11-05):** `food_per_regrowth=N` (default 1) grows N pellets at each tick, so food arrives
+  in bursts of N every S s (mean rate N / S, the same as one pellet every S / N s; use it to vary burstiness
+  at a fixed rate, not to raise the rate). The tick clock is unchanged. **Decision: a batch that does not fit
+  under `max_food` grows partially** (`n_new = min(ticks * N, room)`), not all-or-nothing, so the cap acts as
+  a plain ceiling as it does for single pellets, and N = 1 is exactly the old rule. Saved in `env_kwargs.json`
+  by `run_env_kwargs` (`--food-per-regrowth`); older runs without the key get 1 and replay unchanged.
+- Not yet: retraining with regrowth on (the new default), longer episodes, food decay (wef's step_food_decay),
+  a stochastic (Poisson) rate.
+
+## 300 s episodes: first run with all new defaults (2026-11-03)
+
+Defaults now include `EPISODE_DURATION = 300.0` (saved in `env_kwargs.json` by `run_env_kwargs`; the env
+default stays 120 s, so older runs replay unchanged). Why 300 s: with the 20 initial pellets used up by
+~150-200 s, regrowth (0.1 pellets/s) becomes necessary. Check before training, with `eat_cost_hide_both`
+(trained 120 s, no regrowth) in 300 s episodes: without regrowth 30/30 starve (~172-198 s); with it 0/30,
+error 3.6 (mean action) / 9.3 (sampled), eaten 45.9 / 47.6 of at most 50 (20 + 30 ticks).
+
+Run `default_300s` (flags hidden, attempt cost, regrowth every 10 s, 300 s, seed 0, 1M steps = 404 training
+episodes). Starvation ends at ~73k steps (as for `eat_cost_hide_both`). 30 eval episodes in the 300 s env:
+
+| agent | actions | error | glucose mean | eaten | move |
+|---|---|---|---|---|---|
+| `eat_cost_hide_both` (trained 120 s, no regrowth) | mean | **3.6** | 48.3 | 45.9 | 0.30 |
+| | sampled | 9.3 | 47.3 | 47.6 | 0.40 |
+| `default_300s` (trained in this env) | mean | 10.6 | 46.9 | 48.4 | 0.54 |
+| | sampled | 11.2 | 46.0 | 48.3 | 0.55 |
+
+- **The agent trained here does worse than the transferred one: it depletes the arena.** Mean action, per
+  50 s window (glucose / pellets in arena / move): 0-50 s 53.4 / 17.1 / 0.41, 50-100 s 56.6 / 12.6 / 0.40,
+  150-200 s 51.6 / 4.5 / 0.55, 200-250 s 39.9 / 1.7 / 0.72, 250-300 s 24.5 / 0.9 / 0.72. It overeats for the
+  first 150 s, the arena is nearly empty by ~200 s, intake is then capped by regrowth (below its need), and
+  it swims harder searching, which burns more. The 120 s agent eats near its need throughout (glucose
+  47-49, 4.5 pellets left at the end), which happens to ration the supply.
+- **Training plateaued:** error by 100k-step block 43, 10.4, 10.8, 9.9, 9.8, 8.7, 8.6, 8.2, 9.5, 10.0.
+- **Likely cause: the 30 s planning horizon** (`HORIZON`, gamma = exp(-dt / 30)). Overeating now costs only
+  ~100-150 s later, when the arena is empty, so with a 30 s horizon early eating looks nearly free (a small
+  overshoot) and the later scarcity is heavily discounted. This is the first setup with consequences on
+  a timescale longer than the horizon. Hypothesis, not yet tested; one seed.
+- Figure: `viz/plot_training.py --name default_300s` -> `figures/training_default_300s.png`.
+- Next options: a longer horizon (e.g. 100-300 s, gamma 0.9990-0.9997; more variance in returns, maybe more
+  steps); check that the critic's value drops as food in the arena drops (it cannot see the count directly:
+  with n_nearest = 1 it sees only the nearest pellet's distance, a weak proxy for food density); give the
+  agent more of the food field (`n_nearest` > 1); several seeds.
 
 ## Next step: 3d.2 make the task harder
 

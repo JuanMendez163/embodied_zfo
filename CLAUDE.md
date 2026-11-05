@@ -20,8 +20,8 @@ so `import zfo` works from any directory and scripts can be run by path.
 | `zfo/feeding.py` | Pure functions: `food_in_reach`, `nearest_food_in_reach` (eat radius + mouth cone) |
 | `zfo/metabolism.py` | Pure functions: glucose dynamics (`basal_decay`, `movement_cost`, `update_glucose`), `drive`, `drive_reward`; placeholder rate constants at the top |
 | `zfo/sensing.py` | Pure functions: `egocentric_bearing`, `nearest_food_observation` (k nearest pellets as proximity, cos/sin bearing, in_reach) |
-| `zfo/arena.py` | `Arena`: walls, food as an `(N, 2)` array, `spawn_food`, `remove_food`, `draw` |
-| `zfo/env.py` | `ZebrafishEnv(gymnasium.Env)` (also `from zfo import ZebrafishEnv`): combines the modules above; step order is eat -> move -> glucose -> reward -> end |
+| `zfo/arena.py` | `Arena`: walls, food as an `(N, 2)` array, `spawn_food`, `sample_food_positions`, `regrow_food` (`food_per_regrowth` pellets, default 1, every `food_regrowth_interval` s up to `max_food`; off by default), `remove_food`, `draw` |
+| `zfo/env.py` | `ZebrafishEnv(gymnasium.Env)` (also `from zfo import ZebrafishEnv`): combines the modules above; step order is eat -> move -> regrow -> glucose -> reward -> end |
 | `zfo/policies.py` | Scripted policies as `policy(env, obs)`: `forage_action` (reads env state; drives the `viz/animate_env.py` demo, no longer a training baseline), `random_policy` (lower bound in the training table) |
 | `training/train_ppo.py` | SB3 PPO training: config, `make_env` / `make_ppo_env` (RescaleAction to [-1, 1]; take env kwargs), `load_env_kwargs`, `HomeostasisCallback`; writes `runs/NAME/` (gitignored) |
 | `training/metrics.py` | `episode_metrics`, `evaluate` (per-episode metrics on the same seeded episodes for every policy), `stack_episodes`, `summarize` (means for the table and logs only; analysis uses the saved per-episode arrays), `POOLED_RATIOS`, `ppo_policy`, `print_comparison` |
@@ -61,9 +61,9 @@ so `import zfo` works from any directory and scripts can be run by path.
 - Tests: `conda run -n embodied_zfo python -m pytest -q` (all should pass before committing).
 - Visual checks: `conda run -n embodied_zfo python viz/animate_env.py` (and the other `viz/` scripts);
   outputs go to the repo-root `figures/` from any working directory.
-- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [can_eat] [in_reach]] [--eat-cost none|attempt|press]` (~3 min for
-  the default 1M steps). **Defaults (2026-11-03): both flags hidden, attempt cost** (`HIDE_FLAGS`, `EAT_COST` in
-  `train_ppo.py`; `--hide` with no flags observes both). `ZebrafishEnv`'s own defaults stay all-observed / no cost,
+- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [can_eat] [in_reach]] [--eat-cost none|attempt|press] [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]` (~3 min for
+  the default 1M steps). **Defaults (2026-11-03): both flags hidden, attempt cost, a pellet regrown every 10 s, 300 s episodes** (`HIDE_FLAGS`, `EAT_COST`, `FOOD_REGROWTH_INTERVAL`, `EPISODE_DURATION` in
+  `train_ppo.py`; `--hide` with no flags observes both). `ZebrafishEnv`'s own defaults stay all-observed / no cost / no regrowth / 120 s,
   so older runs whose `env_kwargs.json` is `{}` replay unchanged; new runs save every setting explicitly
   (`run_env_kwargs`). Writes `runs/NAME/model.zip`, `env_kwargs.json` (read back by `load_env_kwargs`, so replay and probes rebuild the same observation), `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   PPO table). SB3 prints a table every update, so redirect stdout to a log file.

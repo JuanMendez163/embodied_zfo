@@ -3,13 +3,20 @@ Train a PPO actor-critic (Stable-Baselines3) to keep glucose near the target, th
 random policy (a lower bound) on the same evaluation episodes (training/metrics.py). Trained agents are
 compared with each other across runs (eval.npz, viz/compare_training.py).
 Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FLAG ...]] [--eat-cost RULE]
+                                     [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]
 (writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
-Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost (HIDE_FLAGS, EAT_COST below).
+Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pellet regrown every 10 s,
+300 s episodes (HIDE_FLAGS, EAT_COST, FOOD_REGROWTH_INTERVAL, EPISODE_DURATION below).
 --hide FLAG ... drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach);
   --hide with no flags observes both.
 --eat-cost none | attempt | press: failed EATs are free (GridWorld) | a press with the cooldown passed
   restarts it, eaten or not (eat_attempt_resets_cooldown) | every press restarts it, even during the
   cooldown (eat_press_resets_cooldown).
+--food-regrowth-interval S: one pellet grows every S seconds while the arena holds fewer than n_food
+  (ZebrafishEnv's food_regrowth_interval); 0 turns regrowth off.
+--food-per-regrowth N: grow N pellets at each of those ticks instead of one (food_per_regrowth), i.e.
+  food arrives in batches; the mean rate is N / S pellets per second.
+--episode-duration S: episode time limit in seconds (ZebrafishEnv's episode_duration; the env default is 120).
 env_kwargs.json records every one of these settings explicitly, so a run replays the same however the
 defaults change. ZebrafishEnv's own defaults are unchanged (all flags observed, no cost), so runs saved
 with env_kwargs.json = {} still replay as trained.
@@ -55,19 +62,27 @@ RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"   # repo-root runs/, whe
 HIDE_FLAGS = ("can_eat", "in_reach")
 EAT_COST = "attempt"
 EAT_COSTS = ("none", "attempt", "press")
+FOOD_REGROWTH_INTERVAL = 10.0     # s per regrowth tick (0.1 pellets/s; staying at target needs ~0.13-0.15/s)
+FOOD_PER_REGROWTH = 1             # pellets grown at each tick
+EPISODE_DURATION = 300.0          # s; long enough that the initial 20 pellets run out (~150 s) and regrowth matters
 
 
-def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST):
+def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FOOD_REGROWTH_INTERVAL,
+                   episode_duration=EPISODE_DURATION, food_per_regrowth=FOOD_PER_REGROWTH):
     """
-    The ZebrafishEnv kwargs of a run, with every observation flag and EAT rule set explicitly (saved as
-    env_kwargs.json). hide: observation flags to leave out ("can_eat", "in_reach"); eat_cost: one of
-    EAT_COSTS.
+    The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth and the
+    episode length set explicitly (saved as env_kwargs.json). hide: observation flags to leave out
+    ("can_eat", "in_reach"); eat_cost: one of EAT_COSTS; food_regrowth_interval: s between regrowth ticks
+    (None or 0: off); episode_duration: s; food_per_regrowth: pellets grown at each tick.
     """
     if eat_cost not in EAT_COSTS:
         raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
     return {"observe_can_eat": "can_eat" not in hide, "observe_in_reach": "in_reach" not in hide,
             "eat_attempt_resets_cooldown": eat_cost == "attempt",
-            "eat_press_resets_cooldown": eat_cost == "press"}
+            "eat_press_resets_cooldown": eat_cost == "press",
+            "food_regrowth_interval": food_regrowth_interval or None,
+            "food_per_regrowth": food_per_regrowth,
+            "episode_duration": episode_duration}
 
 
 def make_env(seed=None, **env_kwargs):
@@ -154,9 +169,16 @@ if __name__ == "__main__":
                         help="observation flags to leave out (default: both; --hide alone observes both)")
     parser.add_argument("--eat-cost", default=EAT_COST, choices=EAT_COSTS,
                         help="what a failed EAT costs (default: attempt)")
+    parser.add_argument("--food-regrowth-interval", type=float, default=FOOD_REGROWTH_INTERVAL,
+                        help="s between regrowth ticks (default: 10; 0 = no regrowth)")
+    parser.add_argument("--food-per-regrowth", type=int, default=FOOD_PER_REGROWTH,
+                        help="pellets grown at each regrowth tick (default: 1)")
+    parser.add_argument("--episode-duration", type=float, default=EPISODE_DURATION,
+                        help="episode time limit in s (default: 300)")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
-    env_kwargs = run_env_kwargs(args.hide, args.eat_cost)
+    env_kwargs = run_env_kwargs(args.hide, args.eat_cost, args.food_regrowth_interval, args.episode_duration,
+                                args.food_per_regrowth)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)
