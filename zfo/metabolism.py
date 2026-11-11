@@ -14,6 +14,11 @@ GridWorld.step_metabolism's per-step constants:
  - intake:         a fixed amount per pellet eaten, capped at glucose_max
  - starvation:     glucose below starvation_threshold is snapped to 0 (decay alone never reaches 0)
 
+Two reward schemes (the env's reward_mode):
+ - drive_reward: reduction in distance from a set point (Gutkin paper / GridWorld)
+ - range_reward: a reward rate while glucose is inside a homeostatic range, nothing outside it,
+                 and a one-off penalty on starving
+
 PLACEHOLDER DEFAULTS: the rates below are chosen to give sensible episode timescales, not taken
 from the zebrafish literature yet. Replace them once there are measured or extrapolated values.
 """
@@ -28,6 +33,9 @@ TURN_COST_RATE = 0.5          # glucose/s at full turn rate (|turn_cmd| = 1); ha
 MOVE_COST_EXPONENT = 2.0      # cost grows with speed**2 and turn rate**2, so gentle swimming/steering is cheap (placeholder)
 INTAKE_AMOUNT = 10.0          # glucose per pellet eaten (GridWorld: 10)
 STARVATION_THRESHOLD = 1.0    # glucose below this counts as starved (GridWorld: 1.0)
+GLUCOSE_RANGE = (40.0, 60.0)  # homeostatic range for range_reward, around the target (placeholder)
+IN_RANGE_REWARD_RATE = 1.0    # reward per second spent inside GLUCOSE_RANGE
+STARVATION_PENALTY = 100.0    # one-off reward lost on starving; large next to the in-range rate (placeholder)
 
 
 def decay_rate_from_half_life(half_life):
@@ -94,3 +102,26 @@ def drive_reward(glucose_before, glucose_after, glucose_target, n=2, m=1):
      - negative when it moved glucose away (including overeating past the target)
     """
     return drive(glucose_before, glucose_target, n, m) - drive(glucose_after, glucose_target, n, m)
+
+
+def in_range(glucose, glucose_range):
+    """
+    Whether glucose lies inside glucose_range = (low, high), bounds included.
+    Works on a number or a numpy array (elementwise).
+    """
+    low, high = glucose_range
+    return (low <= glucose) & (glucose <= high)
+
+
+def range_reward(glucose, glucose_range, dt, starved, in_range_reward_rate=IN_RANGE_REWARD_RATE,
+                 starvation_penalty=STARVATION_PENALTY):
+    """
+    Reward for one step of length dt under the homeostatic-range scheme:
+     - in_range_reward_rate * dt if glucose (after the step) is inside glucose_range, else 0;
+       a rate per second, so the reward summed over a time interval does not depend on dt
+     - minus starvation_penalty on the step the agent starves (a one-off amount, not a rate)
+    """
+    reward = in_range_reward_rate * dt if in_range(glucose, glucose_range) else 0.0
+    if starved:
+        reward -= starvation_penalty
+    return reward

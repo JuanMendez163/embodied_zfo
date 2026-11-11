@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-11-05_
+_Last updated: 2026-11-10_
 
 ## Status
 
@@ -30,9 +30,10 @@ _Last updated: 2026-11-05_
 | Batched regrowth (2026-11-05) | Done | `Arena(food_per_regrowth=)`, `ZebrafishEnv(food_per_regrowth=)`, `train_ppo.py --food-per-regrowth` (default 1), `tests/test_arena.py`, `tests/test_train_ppo.py`; Food regrowth section |
 | 3d.2b 300 s episodes as default, first run (2026-11-03) | Done | `train_ppo.py` (`EPISODE_DURATION`, `--episode-duration`), run `default_300s`; section below |
 | Limited sensing range sweep (2026-11-05) | Done (first look) | `train_ppo.py --sensing-range` (`SENSING_RANGE`, default None = arena diagonal), runs `sense15`, `sense25`, `sense40`; section below |
+| Homeostatic-range reward (2026-11-10) | Built, first run | `metabolism.range_reward` / `in_range` (`GLUCOSE_RANGE`, `IN_RANGE_REWARD_RATE`, `STARVATION_PENALTY`), `ZebrafishEnv(reward_mode="range", glucose_range=, in_range_reward_rate=, starvation_penalty=)`, `train_ppo.py --reward range --glucose-range LOW HIGH --starvation-penalty P`; `viz/animate_ppo.py` shades the range for range-reward runs; run `sense15_range` (sensing 15, defaults, 1.5M steps): det. eval starved 0.27, glucose mean 30, 26 eaten (vs `sense15`, drive reward, 1M: 0.00, 46, 37); decision below |
 | **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
-119 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+129 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -472,6 +473,31 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   (~0.1% per step at the current half-life and dt = 0.1 s). Revisit if dt grows or the half-life shrinks.
 - **Reward** = reduction in drive (Gutkin / GridWorld); no separate starvation penalty.
   `terminated` = starved, `truncated` = time limit (episode length in seconds).
+- **Homeostatic-range reward** (2026-11-10, `reward_mode="range"`, an alternative to the set point; the
+  default stays `"drive"`, so earlier runs replay unchanged): reward `in_range_reward_rate` (1) **per
+  second** while glucose (after the step) is inside `glucose_range` (default (40, 60), bounds included),
+  0 outside, and `-starvation_penalty` (default 100) once on the starving step. Reasons:
+  - **A rate, not +1 per step:** +1 per step would make the return scale with 1/dt (10x more reward at
+    dt = 0.01); `rate * dt` keeps the reward summed over a time interval dt-independent. At dt = 0.1
+    that is +0.1 per in-range step.
+  - **Penalty size:** with the 30 s horizon, staying in range forever is worth ~30 (rate x tau), and
+    starving already forfeits that; 100 makes starving clearly worse than any stretch outside the range.
+    Placeholder, set per run with `--starvation-penalty`.
+  - `reward_scale` defaults to 1 in this mode (the reward is already of order 1); `glucose_target` is
+    then only used by the metrics (`glucose_target_error`).
+  - `run_env_kwargs` now records `reward_mode` (and the range and penalty when it is `"range"`).
+  - Open: the reward is flat inside the range and outside it, so it carries no gradient toward the range
+    from outside except through the starvation penalty.
+- **`in_range_time` metric** (2026-11-10, `episode_metrics(..., glucose_range=GLUCOSE_RANGE)`): seconds
+  with glucose (after each step) inside the range; time after starvation counts as outside. Equals the range
+  reward's undiscounted return at rate 1, before the starvation penalty. Computed for every run (drive runs
+  with the default range). `viz/plot_training.py` plots it for runs that saved it. `sense15_range` was
+  retrained with it (same seed and settings): weights, eval and training episodes identical to the first run.
+  Eval: PPO 89 s, random 7 s (of 300); training curve rises from ~5 s to ~120-150 s by 1.5M steps.
+  - **Seconds, not a fraction** (user's choice): first built as `in_range_fraction` (seconds / episode
+    duration); switched to seconds since every current run uses 300 s episodes. Return to the fraction
+    (or divide when plotting) to compare runs with different episode lengths. `sense15_range`'s saved
+    files were converted in place (fraction x 300 s, the same value).
 - **Observation (`obs_mode="nearest"`, default)** = `[glucose / glucose_max, can_eat]` followed by,
   for each of the `n_nearest` (k, default 1) nearest pellets within `sensing_range`,
   `[proximity, cos(bearing), sin(bearing), in_reach]`. With k = 1 this is the continuous port of

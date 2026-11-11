@@ -1,6 +1,7 @@
 """
 Video of a trained PPO agent (runs/NAME/model.zip) in one evaluation episode: the agent in the arena
-(left), its glucose trace (right, top) and its EAT command (right, bottom: the policy's mean eat_cmd at
+(left), its glucose trace (right, top; the target line, or for range-reward runs the shaded homeostatic
+range) and its EAT command (right, bottom: the policy's mean eat_cmd at
 each step against the shaded EAT region above EAT_THRESHOLD, with, for --sampled, a right axis giving the
 probability that the sampled command holds EAT; move and turn commands are in the status text under the arena).
 What the agent actually did at each step is in the arena: the mouth cone and the status text.
@@ -59,6 +60,20 @@ def add_eat_probability_axis(ax, std_eat):
     return right
 
 
+def draw_glucose_reference(ax, env, duration):
+    """
+    What the reward aims for, on the glucose panel ax: the homeostatic range shaded for range-reward runs
+    (env.reward_mode == "range"), otherwise a dashed line at the target. Labeled at the right edge (duration).
+    """
+    if env.reward_mode == "range":
+        low, high = env.glucose_range
+        ax.axhspan(low, high, color=AGENT, alpha=0.1, linewidth=0)
+        ax.text(duration, (low + high) / 2, " range", va="center", fontsize=8, color=TEXT_MUTED)
+    else:
+        ax.axhline(env.glucose_target, color=TEXT_MUTED, linestyle="--", linewidth=1)
+        ax.text(duration, env.glucose_target, " target", va="center", fontsize=8, color=TEXT_MUTED)
+
+
 def simulate(model, seed, env_kwargs=None, sampled=False):
     """
     One episode of the policy on make_ppo_env(**env_kwargs), reset with seed: mean actions, or actions
@@ -101,7 +116,8 @@ def make_animation(model, name, seed, sampled=False):
     labeled with the run name, and the episode's episode_metrics. Nothing is saved; see save_animation.
     """
     env, frames, infos = simulate(model, seed, load_env_kwargs(name), sampled)
-    metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown)
+    metrics = episode_metrics(infos, env.dt, env.glucose_target, env.max_steps * env.dt, env.eat_cooldown,
+                              env.glucose_range)
     duration = env.max_steps * env.dt
 
     times = np.array([f["t"] for f in frames])
@@ -146,8 +162,7 @@ def make_animation(model, name, seed, sampled=False):
     ax_g = fig.add_subplot(grid[0, 1])
     style_trace(ax_g, duration)
     ax_g.set_ylim(0, env.glucose_max)
-    ax_g.axhline(env.glucose_target, color=TEXT_MUTED, linestyle="--", linewidth=1)
-    ax_g.text(duration, env.glucose_target, " target", va="center", fontsize=8, color=TEXT_MUTED)
+    draw_glucose_reference(ax_g, env, duration)
     ax_g.axhline(env.starvation_threshold, color=TURN, linestyle=":", linewidth=1)
     ax_g.text(duration, env.starvation_threshold, " starve", va="center", fontsize=8, color=TEXT_MUTED)
     ax_g.set_ylabel("glucose", fontsize=9, color=TEXT_MUTED)

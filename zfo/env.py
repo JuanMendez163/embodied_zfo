@@ -17,7 +17,9 @@ Within a step, in order:
  3. regrow: Arena.regrow_food over dt (food_per_regrowth pellets every food_regrowth_interval s, up to max_food,
             away from the agent's new position); off by default
  4. glucose: update_glucose over dt (decay, movement and turning cost, intake)
- 5. reward: drive_reward(glucose before, glucose after) / reward_scale, as in the Gutkin paper / GridWorld
+ 5. reward: reward_mode="drive" (default): drive_reward(glucose before, glucose after) / reward_scale, as in
+            the Gutkin paper / GridWorld; reward_mode="range": range_reward (a rate per second inside
+            glucose_range, 0 outside, minus starvation_penalty on starving) / reward_scale
  6. end:    terminated when starved (glucose == 0), truncated at the episode time limit
 
 All rates are in seconds; dt only sets how finely time is sampled.
@@ -31,9 +33,10 @@ from gymnasium import spaces
 
 from zfo.arena import Arena
 from zfo.feeding import nearest_food_in_reach
-from zfo.metabolism import (GLUCOSE_HALF_LIFE, GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, MOVE_COST_EXPONENT,
-                        MOVE_COST_RATE, STARVATION_THRESHOLD, TURN_COST_RATE, decay_rate_from_half_life,
-                        drive, drive_reward, update_glucose)
+from zfo.metabolism import (GLUCOSE_HALF_LIFE, GLUCOSE_MAX, GLUCOSE_RANGE, GLUCOSE_TARGET, IN_RANGE_REWARD_RATE,
+                        INTAKE_AMOUNT, MOVE_COST_EXPONENT, MOVE_COST_RATE, STARVATION_PENALTY,
+                        STARVATION_THRESHOLD, TURN_COST_RATE, decay_rate_from_half_life, drive, drive_reward,
+                        range_reward, update_glucose)
 from zfo.movement import step_pose
 from zfo.sensing import nearest_food_observation
 
@@ -58,7 +61,12 @@ class ZebrafishEnv(gym.Env):
     eat_press_resets_cooldown=True is the stricter cost: every press restarts the cooldown, including
     presses made during it, so holding EAT strikes only once and eating needs a release then a tap
     (implies the attempt rule).
-    Reward: reduction in drive (distance from glucose_target) over the step, divided by reward_scale.
+    Reward (reward_mode), divided by reward_scale:
+     - "drive" (default): reduction in drive (distance from glucose_target) over the step; reward_scale
+       defaults to one pellet's worth
+     - "range": in_range_reward_rate per second while glucose is inside glucose_range = (low, high),
+       0 outside it, minus starvation_penalty on the step the agent starves; reward_scale defaults to 1
+       (glucose_target is then only used by the metrics)
     glucose_start: None (start at glucose_target), a number, or a (low, high) range sampled uniformly
     at every reset.
     """
@@ -73,7 +81,9 @@ class ZebrafishEnv(gym.Env):
                  glucose_half_life=GLUCOSE_HALF_LIFE, move_cost_rate=MOVE_COST_RATE,
                  turn_cost_rate=TURN_COST_RATE, move_cost_exponent=MOVE_COST_EXPONENT,
                  intake_amount=INTAKE_AMOUNT, starvation_threshold=STARVATION_THRESHOLD,
-                 drive_n=2, drive_m=1, reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
+                 drive_n=2, drive_m=1, reward_mode="drive", glucose_range=GLUCOSE_RANGE,
+                 in_range_reward_rate=IN_RANGE_REWARD_RATE, starvation_penalty=STARVATION_PENALTY,
+                 reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
                  observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False,
                  eat_press_resets_cooldown=False, seed=None):
         super().__init__()
@@ -110,9 +120,21 @@ class ZebrafishEnv(gym.Env):
         self.starvation_threshold = starvation_threshold
         self.drive_n = drive_n
         self.drive_m = drive_m
-        # Divides the drive reward so PPO's critic sees returns of order 1; a constant factor does not
+
+        # reward: "drive" (distance from the set point) or "range" (time inside a homeostatic range)
+        if reward_mode not in ("drive", "range"):
+            raise ValueError(f"reward_mode must be 'drive' or 'range', got {reward_mode!r}")
+        if not glucose_range[0] < glucose_range[1]:
+            raise ValueError(f"glucose_range must be (low, high) with low < high, got {glucose_range!r}")
+        self.reward_mode = reward_mode
+        self.glucose_range = tuple(glucose_range)
+        self.in_range_reward_rate = in_range_reward_rate    # reward per second inside the range
+        self.starvation_penalty = starvation_penalty        # one-off, on the step the agent starves
+        # Divides the reward so PPO's critic sees returns of order 1; a constant factor does not
         # change the optimal policy, and keeps the summed reward over a time interval dt-independent.
-        if reward_scale is None:
+        if reward_scale is None and reward_mode == "range":
+            reward_scale = 1.0                              # already of order 1 (a rate of 1 per second)
+        elif reward_scale is None:
             # the reward for one pellet eaten just below the target (target - intake -> target),
             # so the scaled reward is in units of "one ideal pellet"
             reward_scale = drive_reward(self.glucose_target - self.intake_amount, self.glucose_target,
@@ -189,14 +211,18 @@ class ZebrafishEnv(gym.Env):
             glucose_max=self.glucose_max, starvation_threshold=self.starvation_threshold)
         self.time_since_last_eat += self.dt # keeping track of eating cooldown
 
-        # 5. reward: reduction in drive (no separate starvation penalty, as in GridWorld)
-        # we scale by reward_scale to put in order 1 for PPO
-        reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n,
-                              self.drive_m) / self.reward_scale
+        # 5. reward, scaled by reward_scale to put it in order 1 for PPO
+        starved = self.glucose == 0.0
+        if self.reward_mode == "drive":     # reduction in drive (no separate starvation penalty, as in GridWorld)
+            reward = drive_reward(glucose_before, self.glucose, self.glucose_target, self.drive_n, self.drive_m)
+        else:                               # time inside the homeostatic range, penalty on starving
+            reward = range_reward(self.glucose, self.glucose_range, self.dt, starved,
+                                  self.in_range_reward_rate, self.starvation_penalty)
+        reward /= self.reward_scale
 
         # 6. episode end
         self.step_count += 1
-        terminated = self.glucose == 0.0
+        terminated = starved
         truncated = not terminated and self.step_count >= self.max_steps
 
         info = self._get_info()

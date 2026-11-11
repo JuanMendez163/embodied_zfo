@@ -9,6 +9,8 @@ with dt (see docs/PORTING_NOTES.md, "Evaluation metrics").
 
 import numpy as np
 
+from zfo.metabolism import GLUCOSE_RANGE, in_range
+
 EVAL_EPISODES = 30
 EVAL_SEED = 10_000 # evaluation episodes use seeds the training envs never see; equivalent to a "train-test" split
 # per-episode totals (counts, seconds) that the ratio metrics are built from, kept so ratios can be
@@ -17,7 +19,7 @@ RAW_KEYS = ("eat_opportunities", "eat_held_time", "eat_out_of_reach_time", "eat_
             "eat_strikes")
 
 
-def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
+def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown, glucose_range=GLUCOSE_RANGE):
     """
     Summary of how well one episode kept homeostasis, as a dict of floats (all averaged over episodes).
     infos: the env's info dict from every step of the episode, in order. Each has "glucose", "action"
@@ -28,6 +30,8 @@ def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
     episode_duration: the time limit (s), so time after starvation can be counted (as glucose 0) and
     every episode is averaged over the same duration.
     eat_cooldown: s between successful eats, which caps the eating rate at 1 / eat_cooldown.
+    glucose_range: (low, high) for in_range_time (the env's glucose_range; defaults to GLUCOSE_RANGE so
+    drive-reward runs get the same measure).
     Ratios with nothing to divide by (an episode without EAT presses) are nan, not 0, so they are
     skipped by summarize instead of reading as "ate badly" or "aimed perfectly".
     Note: metrics with a raw step count are NOT dt-independent, be wary
@@ -76,6 +80,9 @@ def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
     # error_dead adds max possible error (glucose_target away) after starvation, so the mean error is over the full episode duration, not just the alive time
     # this allows for fair comparison between starved vs. non-starved episodes
     error_dead = max(0.0, episode_duration - info["time"]) * glucose_target
+    # time with glucose (after each step, as the range reward sees it) inside glucose_range, in s; time after
+    # starvation counts as outside (it is never in range)
+    in_range_time = np.sum(in_range(glucose_trace, glucose_range)) * dt
 
     # EAT-held time and why presses fail, in s (reach first: no food at the mouth, then food at the
     # mouth but still cooling down); the rest (~eats * dt) are successful presses
@@ -89,6 +96,9 @@ def episode_metrics(infos, dt, glucose_target, episode_duration, eat_cooldown):
         "glucose_mean": float(np.mean(glucose_trace)),
         "glucose_std": float(np.std(glucose_trace)),
         "glucose_target_error": float((error_alive + error_dead) / episode_duration),
+        # s spent inside glucose_range (= the range reward's undiscounted return at rate 1, before the penalty);
+        # divide by episode_duration to compare runs with different episode lengths
+        "in_range_time": float(in_range_time),
         "total_eaten": float(info["total_eaten"]),
         "time": float(info["time"]),
         "mean_move_cmd": float(np.mean(actions[:, 0])),
@@ -132,7 +142,7 @@ def evaluate(policy, env_fn, n_episodes=EVAL_EPISODES, seed=EVAL_SEED):
             trace.append(info) # record info
             done = terminated or truncated # check if episode done
         results.append(episode_metrics(trace, base.dt, base.glucose_target, base.max_steps * base.dt,
-                                       base.eat_cooldown)) # record info for the entire episode
+                                       base.eat_cooldown, base.glucose_range)) # record info for the entire episode
     per_episode = stack_episodes(results) # records every episode's info in a dict, with metrics as keys
     per_episode["seed"] = seed + np.arange(n_episodes) # stores the seed of each episode
     return per_episode

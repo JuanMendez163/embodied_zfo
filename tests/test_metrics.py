@@ -76,6 +76,15 @@ def test_starved_time_counts_as_target_error():
     assert math.isclose(m["glucose_target_error"], TARGET / 2)
 
 
+def test_in_range_time_counts_only_alive_time_inside():
+    # alive 1 s inside the range, then starved for the rest of a 2 s episode: 1 s in range
+    infos = make_infos([False] * 10, end_reason="starved")
+    m = episode_metrics(infos, DT, TARGET, 2 * len(infos) * DT, COOLDOWN, glucose_range=(40.0, 60.0))
+    assert math.isclose(m["in_range_time"], len(infos) * DT)
+    m = episode_metrics(infos, DT, TARGET, len(infos) * DT, COOLDOWN, glucose_range=(55.0, 60.0))
+    assert m["in_range_time"] == 0.0                 # glucose 50 is below this range
+
+
 def test_opportunities_do_not_depend_on_dt():
     # the same 3 s bout sampled at two dts
     at_dt = [episode_metrics(make_infos([True] * round(3.0 / dt)), dt, TARGET, 3.0, COOLDOWN)

@@ -273,6 +273,32 @@ def test_default_reward_scale_is_positive():
     assert np.isfinite(scale) and scale > 0
 
 
+def test_range_reward_inside_and_outside_the_range():
+    env = ZebrafishEnv(reward_mode="range", glucose_range=(40.0, 60.0), dt=0.1)
+    env.reset(seed=0)                      # starts at the target, inside the range
+    assert env.reward_scale == 1.0
+    assert math.isclose(env.step(IDLE)[1], 0.1)    # 1 per second inside the range
+    env.glucose = 30.0
+    assert env.step(IDLE)[1] == 0.0                 # below the range
+
+
+def test_range_reward_penalizes_starvation():
+    env = ZebrafishEnv(reward_mode="range", starvation_penalty=50.0)
+    env.reset(seed=0)
+    env.glucose = 1.0
+    _, reward, terminated, _, _ = env.step(IDLE)
+    assert terminated and reward == -50.0
+
+
+def test_invalid_reward_settings_raise():
+    for kwargs in [{"reward_mode": "points"}, {"reward_mode": "range", "glucose_range": (60.0, 40.0)}]:
+        try:
+            ZebrafishEnv(**kwargs)
+        except ValueError:
+            continue
+        raise AssertionError(f"no error for {kwargs}")
+
+
 def test_starvation_terminates():
     env = ZebrafishEnv()
     env.reset(seed=0)

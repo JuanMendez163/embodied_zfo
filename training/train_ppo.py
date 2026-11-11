@@ -4,7 +4,8 @@ random policy (a lower bound) on the same evaluation episodes (training/metrics.
 compared with each other across runs (eval.npz, viz/compare_training.py).
 Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FLAG ...]] [--eat-cost RULE]
                                      [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]
-                                     [--sensing-range R]
+                                     [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH]
+                                     [--starvation-penalty P]
 (writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pellet regrown every 10 s,
 300 s episodes (HIDE_FLAGS, EAT_COST, FOOD_REGROWTH_INTERVAL, EPISODE_DURATION below).
@@ -20,6 +21,9 @@ Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pell
 --episode-duration S: episode time limit in seconds (ZebrafishEnv's episode_duration; the env default is 120).
 --sensing-range R: pellets farther than R (arena units) are not sensed (ZebrafishEnv's sensing_range);
   0 = the arena diagonal, i.e. sees everything (the default).
+--reward drive | range: reward the reduction in distance from the glucose target (default) | +1 per second
+  with glucose inside --glucose-range LOW HIGH (default 40 60), 0 outside it, and -P once on starving
+  (--starvation-penalty, default 100) (ZebrafishEnv's reward_mode, glucose_range, starvation_penalty).
 env_kwargs.json records every one of these settings explicitly, so a run replays the same however the
 defaults change. ZebrafishEnv's own defaults are unchanged (all flags observed, no cost), so runs saved
 with env_kwargs.json = {} still replay as trained.
@@ -49,6 +53,7 @@ from stable_baselines3.common.logger import configure
 from training.metrics import (episode_metrics, evaluate, ppo_policy, print_comparison, stack_episodes,
                               summarize)
 from zfo.env import ZebrafishEnv
+from zfo.metabolism import GLUCOSE_RANGE, STARVATION_PENALTY
 from zfo.policies import random_policy
 
 DT = 0.1                          # s per step
@@ -69,27 +74,37 @@ FOOD_REGROWTH_INTERVAL = 10.0     # s per regrowth tick (0.1 pellets/s; staying 
 FOOD_PER_REGROWTH = 1             # pellets grown at each tick
 SENSING_RANGE = None              # arena units; None: the arena diagonal (sees everything)
 EPISODE_DURATION = 300.0          # s; long enough that the initial 20 pellets run out (~150 s) and regrowth matters
+REWARD_MODE = "drive"             # "drive": distance from the target; "range": time inside GLUCOSE_RANGE
+REWARD_MODES = ("drive", "range")
 
 
 def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FOOD_REGROWTH_INTERVAL,
                    episode_duration=EPISODE_DURATION, food_per_regrowth=FOOD_PER_REGROWTH,
-                   sensing_range=SENSING_RANGE):
+                   sensing_range=SENSING_RANGE, reward_mode=REWARD_MODE, glucose_range=GLUCOSE_RANGE,
+                   starvation_penalty=STARVATION_PENALTY):
     """
-    The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth and the
-    episode length set explicitly (saved as env_kwargs.json). hide: observation flags to leave out
-    ("can_eat", "in_reach"); eat_cost: one of EAT_COSTS; food_regrowth_interval: s between regrowth ticks
-    (None or 0: off); episode_duration: s; food_per_regrowth: pellets grown at each tick; sensing_range:
-    arena units (None or 0: the arena diagonal, sees everything).
+    The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth, the
+    episode length and the reward set explicitly (saved as env_kwargs.json). hide: observation flags to
+    leave out ("can_eat", "in_reach"); eat_cost: one of EAT_COSTS; food_regrowth_interval: s between
+    regrowth ticks (None or 0: off); episode_duration: s; food_per_regrowth: pellets grown at each tick;
+    sensing_range: arena units (None or 0: the arena diagonal, sees everything); reward_mode: one of
+    REWARD_MODES; glucose_range, starvation_penalty: the range reward's (low, high) and one-off penalty
+    (recorded only when reward_mode is "range").
     """
     if eat_cost not in EAT_COSTS:
         raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
+    if reward_mode not in REWARD_MODES:
+        raise ValueError(f"reward_mode must be one of {REWARD_MODES}, got {reward_mode!r}")
+    reward = {"reward_mode": reward_mode}
+    if reward_mode == "range":
+        reward.update({"glucose_range": list(glucose_range), "starvation_penalty": starvation_penalty})
     return {"observe_can_eat": "can_eat" not in hide, "observe_in_reach": "in_reach" not in hide,
             "eat_attempt_resets_cooldown": eat_cost == "attempt",
             "eat_press_resets_cooldown": eat_cost == "press",
             "food_regrowth_interval": food_regrowth_interval or None,
             "food_per_regrowth": food_per_regrowth,
             "sensing_range": sensing_range or None,
-            "episode_duration": episode_duration}
+            "episode_duration": episode_duration, **reward}
 
 
 def make_env(seed=None, **env_kwargs):
@@ -130,10 +145,11 @@ class HomeostasisCallback(BaseCallback):
     """
 
     # stores the physical parameters of the env that episode_metrics needs, and where to save episodes
-    def __init__(self, dt, glucose_target, episode_duration, eat_cooldown, save_path):
+    def __init__(self, dt, glucose_target, episode_duration, eat_cooldown, save_path, glucose_range=GLUCOSE_RANGE):
         super().__init__()
         self.dt = dt
         self.glucose_target = glucose_target
+        self.glucose_range = glucose_range
         self.episode_duration = episode_duration
         self.eat_cooldown = eat_cooldown
         self.save_path = save_path
@@ -148,7 +164,7 @@ class HomeostasisCallback(BaseCallback):
             self.traces[i].append(info) # stores info for each env i
             if done:    # the VecEnv has already reset this env, but info is still the final step's. VecEnv automatically resets env after episode finish
                 metrics = episode_metrics(self.traces[i], self.dt, self.glucose_target,
-                                          self.episode_duration, self.eat_cooldown)
+                                          self.episode_duration, self.eat_cooldown, self.glucose_range)
                 self.finished.append(metrics)
                 # num_timesteps already counts this step (SB3 adds n_envs before calling the callback)
                 self.episodes.append({"timestep": self.num_timesteps, "env": i, **metrics})
@@ -184,10 +200,17 @@ if __name__ == "__main__":
                         help="episode time limit in s (default: 300)")
     parser.add_argument("--sensing-range", type=float, default=SENSING_RANGE,
                         help="pellets farther than this are not sensed (default: arena diagonal; 0 = same)")
+    parser.add_argument("--reward", default=REWARD_MODE, choices=REWARD_MODES,
+                        help="drive: distance from the target (default); range: time inside --glucose-range")
+    parser.add_argument("--glucose-range", type=float, nargs=2, default=list(GLUCOSE_RANGE),
+                        metavar=("LOW", "HIGH"), help="homeostatic range for --reward range (default: 40 60)")
+    parser.add_argument("--starvation-penalty", type=float, default=STARVATION_PENALTY,
+                        help="one-off penalty on starving for --reward range (default: 100)")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = run_env_kwargs(args.hide, args.eat_cost, args.food_regrowth_interval, args.episode_duration,
-                                args.food_per_regrowth, args.sensing_range)
+                                args.food_per_regrowth, args.sensing_range, args.reward, args.glucose_range,
+                                args.starvation_penalty)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)
@@ -203,7 +226,8 @@ if __name__ == "__main__":
     # keeps the metrics of every episode (saved to train_episodes.npz each rollout)
     # at the end of each rollout it logs the summarized episode_metrics of the episodes that finished
     callback = HomeostasisCallback(probe.dt, probe.glucose_target, probe.max_steps * probe.dt,
-                                   probe.eat_cooldown, os.path.join(run_dir, "train_episodes.npz"))
+                                   probe.eat_cooldown, os.path.join(run_dir, "train_episodes.npz"),
+                                   probe.glucose_range)
     model.learn(args.timesteps, callback=callback) # does the whole training loop, until args.timesteps env steps have been collected
     model.save(os.path.join(run_dir, "model"))
 

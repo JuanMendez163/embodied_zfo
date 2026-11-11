@@ -2,12 +2,16 @@
 Learning curves from a training run's per-episode metrics (runs/NAME/train_episodes.npz, written by
 training/train_ppo.py's HomeostasisCallback).
 Run with: python viz/plot_training.py [--name NAME]  (saves figures/training_NAME.png)
+One row over the whole run, laid out like viz/compare_training.py (before 2026-11-10 it had a second row
+zoomed on the first 100k steps; compare_training.py --names NAME keeps that zoom).
 
 The x-axis is training experience: total env steps over all parallel envs when an episode ended. With
 N_ENVS envs the episodes do not form one sequence, but every rollout (N_STEPS per env) is collected with
 one fixed policy, so episodes ending in the same rollout are samples of the same policy version and are
 grouped by rollout. An episode (episode_duration / dt steps) can span a policy update, so the curve is
 blurred over about one update.
+Columns: survival time, fraction starved, pellets eaten, and, for runs that saved it (trained since
+2026-11-10), the time (s) each episode spent inside the glucose range (in_range_time).
 """
 
 import argparse
@@ -89,17 +93,16 @@ def plot_learning_curve(ax, episodes, key, ylabel, steps_per_rollout=STEPS_PER_R
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="ppo")
-    parser.add_argument("--zoom", type=int, default=100_000, help="env steps shown in the bottom row")
     args = parser.parse_args()
 
     episodes = load_train_episodes(args.name)
-    # top row: the whole run; bottom row: the first --zoom env steps, with rollout boundaries
-    fig, axes = plt.subplots(2, 2, figsize=(11, 7))
-    for row, xmax in enumerate([None, args.zoom]):
-        plot_learning_curve(axes[row, 0], episodes, "time", "survival time (s)", xmax=xmax)
-        plot_learning_curve(axes[row, 1], episodes, "starved", "fraction of episodes starved", xmax=xmax)
-    axes[1, 0].set_title(f"first {args.zoom:,} steps; vertical lines = rollout boundaries "
-                         f"({STEPS_PER_ROLLOUT:,} steps each)", fontsize=9, loc="left", color=TEXT_MUTED)
+    panels = [("time", "survival time (s)"), ("starved", "fraction of episodes starved"),
+              ("total_eaten", "pellets eaten")]
+    if "in_range_time" in episodes:         # older runs did not save it
+        panels.append(("in_range_time", "time in glucose range (s)"))
+    fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 3.75))
+    for ax, (key, ylabel) in zip(axes, panels):
+        plot_learning_curve(ax, episodes, key, ylabel)
     fig.suptitle(f"run {args.name}: {len(episodes['time'])} training episodes, {N_ENVS} envs; "
                  f"line = mean per rollout, band = ±1 standard error")
     fig.tight_layout()

@@ -4,8 +4,11 @@ Sanity checks for metabolism.py. Run with: pytest test_metabolism.py
 
 import math
 
+import numpy as np
+
 from zfo.metabolism import (GLUCOSE_MAX, GLUCOSE_TARGET, INTAKE_AMOUNT, STARVATION_THRESHOLD, basal_decay,
-                        decay_rate_from_half_life, drive, drive_reward, movement_cost, update_glucose)
+                        decay_rate_from_half_life, drive, drive_reward, in_range, movement_cost, range_reward,
+                        update_glucose)
 
 K = decay_rate_from_half_life(30.0)
 
@@ -111,3 +114,27 @@ def test_reward_sign():
     assert drive_reward(30.0, 40.0, GLUCOSE_TARGET) > 0     # toward the target
     assert drive_reward(40.0, 30.0, GLUCOSE_TARGET) < 0     # away from it
     assert drive_reward(55.0, 65.0, GLUCOSE_TARGET) < 0     # overeating past it
+
+
+# --- range reward ---
+
+def test_in_range_includes_bounds():
+    assert in_range(40.0, (40.0, 60.0)) and in_range(60.0, (40.0, 60.0)) and in_range(50.0, (40.0, 60.0))
+    assert not in_range(39.9, (40.0, 60.0)) and not in_range(60.1, (40.0, 60.0))
+    assert list(in_range(np.array([30.0, 40.0, 50.0, 70.0]), (40.0, 60.0))) == [False, True, True, False]
+
+
+def test_range_reward_is_a_rate_inside_and_zero_outside():
+    assert math.isclose(range_reward(50.0, (40.0, 60.0), 0.1, False, in_range_reward_rate=2.0), 0.2)
+    assert range_reward(30.0, (40.0, 60.0), 0.1, False) == 0.0
+    assert range_reward(70.0, (40.0, 60.0), 0.1, False) == 0.0
+
+
+def test_range_reward_penalizes_starving_once():
+    assert range_reward(0.0, (40.0, 60.0), 0.1, True, starvation_penalty=100.0) == -100.0
+
+
+def test_range_reward_summed_over_time_is_dt_independent():
+    for dt in (0.1, 0.05, 0.02):
+        total = sum(range_reward(50.0, (40.0, 60.0), dt, False) for _ in range(round(10.0 / dt)))
+        assert math.isclose(total, 10.0)            # 10 s inside the range at a rate of 1 per second
