@@ -5,7 +5,7 @@ compared with each other across runs (eval.npz, viz/compare_training.py).
 Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FLAG ...]] [--eat-cost RULE]
                                      [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]
                                      [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH]
-                                     [--starvation-penalty P]
+                                     [--starvation-penalty P] [--intake-amount G]
 (writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pellet regrown every 10 s,
 300 s episodes (HIDE_FLAGS, EAT_COST, FOOD_REGROWTH_INTERVAL, EPISODE_DURATION below).
@@ -24,6 +24,7 @@ Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pell
 --reward drive | range: reward the reduction in distance from the glucose target (default) | +1 per second
   with glucose inside --glucose-range LOW HIGH (default 40 60), 0 outside it, and -P once on starving
   (--starvation-penalty, default 100) (ZebrafishEnv's reward_mode, glucose_range, starvation_penalty).
+--intake-amount G: glucose gained per pellet eaten (ZebrafishEnv's intake_amount; default INTAKE_AMOUNT, 10).
 env_kwargs.json records every one of these settings explicitly, so a run replays the same however the
 defaults change. ZebrafishEnv's own defaults are unchanged (all flags observed, no cost), so runs saved
 with env_kwargs.json = {} still replay as trained.
@@ -53,7 +54,7 @@ from stable_baselines3.common.logger import configure
 from training.metrics import (episode_metrics, evaluate, ppo_policy, print_comparison, stack_episodes,
                               summarize)
 from zfo.env import ZebrafishEnv
-from zfo.metabolism import GLUCOSE_RANGE, STARVATION_PENALTY
+from zfo.metabolism import GLUCOSE_RANGE, INTAKE_AMOUNT, STARVATION_PENALTY
 from zfo.policies import random_policy
 
 DT = 0.1                          # s per step
@@ -81,7 +82,7 @@ REWARD_MODES = ("drive", "range")
 def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FOOD_REGROWTH_INTERVAL,
                    episode_duration=EPISODE_DURATION, food_per_regrowth=FOOD_PER_REGROWTH,
                    sensing_range=SENSING_RANGE, reward_mode=REWARD_MODE, glucose_range=GLUCOSE_RANGE,
-                   starvation_penalty=STARVATION_PENALTY):
+                   starvation_penalty=STARVATION_PENALTY, intake_amount=INTAKE_AMOUNT):
     """
     The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth, the
     episode length and the reward set explicitly (saved as env_kwargs.json). hide: observation flags to
@@ -89,7 +90,7 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
     regrowth ticks (None or 0: off); episode_duration: s; food_per_regrowth: pellets grown at each tick;
     sensing_range: arena units (None or 0: the arena diagonal, sees everything); reward_mode: one of
     REWARD_MODES; glucose_range, starvation_penalty: the range reward's (low, high) and one-off penalty
-    (recorded only when reward_mode is "range").
+    (recorded only when reward_mode is "range"); intake_amount: glucose per pellet eaten.
     """
     if eat_cost not in EAT_COSTS:
         raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
@@ -104,7 +105,7 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
             "food_regrowth_interval": food_regrowth_interval or None,
             "food_per_regrowth": food_per_regrowth,
             "sensing_range": sensing_range or None,
-            "episode_duration": episode_duration, **reward}
+            "episode_duration": episode_duration, "intake_amount": intake_amount, **reward}
 
 
 def make_env(seed=None, **env_kwargs):
@@ -206,11 +207,13 @@ if __name__ == "__main__":
                         metavar=("LOW", "HIGH"), help="homeostatic range for --reward range (default: 40 60)")
     parser.add_argument("--starvation-penalty", type=float, default=STARVATION_PENALTY,
                         help="one-off penalty on starving for --reward range (default: 100)")
+    parser.add_argument("--intake-amount", type=float, default=INTAKE_AMOUNT,
+                        help="glucose gained per pellet eaten (default: 10)")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = run_env_kwargs(args.hide, args.eat_cost, args.food_regrowth_interval, args.episode_duration,
                                 args.food_per_regrowth, args.sensing_range, args.reward, args.glucose_range,
-                                args.starvation_penalty)
+                                args.starvation_penalty, args.intake_amount)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)

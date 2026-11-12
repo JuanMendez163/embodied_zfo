@@ -31,9 +31,10 @@ _Last updated: 2026-11-10_
 | 3d.2b 300 s episodes as default, first run (2026-11-03) | Done | `train_ppo.py` (`EPISODE_DURATION`, `--episode-duration`), run `default_300s`; section below |
 | Limited sensing range sweep (2026-11-05) | Done (first look) | `train_ppo.py --sensing-range` (`SENSING_RANGE`, default None = arena diagonal), runs `sense15`, `sense25`, `sense40`; section below |
 | Homeostatic-range reward (2026-11-10) | Built, first run | `metabolism.range_reward` / `in_range` (`GLUCOSE_RANGE`, `IN_RANGE_REWARD_RATE`, `STARVATION_PENALTY`), `ZebrafishEnv(reward_mode="range", glucose_range=, in_range_reward_rate=, starvation_penalty=)`, `train_ppo.py --reward range --glucose-range LOW HIGH --starvation-penalty P`; `viz/animate_ppo.py` shades the range for range-reward runs; run `sense15_range` (sensing 15, defaults, 1.5M steps): det. eval starved 0.27, glucose mean 30, 26 eaten (vs `sense15`, drive reward, 1M: 0.00, 46, 37); decision below |
+| Intake per pellet as a run setting (2026-11-12) | Done, first run | `train_ppo.py --intake-amount G` (default `INTAKE_AMOUNT` = 10), always saved in `env_kwargs.json`; run `sense15_range_intake5` (as `sense15_range`, intake 5, 1.5M steps): det. eval starved 1.00 (30/30), 0.07 eaten, survives 157 s (random 50 s), mean move_cmd 0.01: it sits still and starves slowly. Training peaked at 0.6-0.7M steps (14% survive, 15 eaten, 190 s) then collapsed (1.4M+: 0% survive, 5 eaten); run `sense15_range_intake5_regrow5` (+ `--food-regrowth-interval 5`, same glucose/s as intake 10): starved 0.87, 18 eaten, 224 s, in range 37 s; design decisions entry |
 | **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
-129 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+131 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -498,6 +499,30 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
     duration); switched to seconds since every current run uses 300 s episodes. Return to the fraction
     (or divide when plotting) to compare runs with different episode lengths. `sense15_range`'s saved
     files were converted in place (fraction x 300 s, the same value).
+- **Intake per pellet as a run setting** (2026-11-12, `train_ppo.py --intake-amount G`): set through
+  `ZebrafishEnv(intake_amount=)` and always recorded in `env_kwargs.json`, rather than by editing
+  `INTAKE_AMOUNT`, which would silently change the replay of every earlier run (their `env_kwargs.json`
+  do not record it, so they rebuild with the module default, 10). Halving it halves glucose per pellet,
+  so holding the range needs about twice the pellet rate (regrowth stays 1 per 10 s).
+  First run `sense15_range_intake5` failed: the deterministic policy barely moves (move_cmd 0.01,
+  |turn| 0.09) and starves in every eval episode, but ~3x later than random (157 s vs 50 s). Likely
+  cause: with half the intake the in-range reward is rarely reached (in-range time 6-18 s per episode
+  throughout training), so the return is dominated by the starvation penalty, and conserving glucose
+  to push that penalty further into the discounted future pays more than foraging. Training episodes
+  did learn some foraging first (0.6-0.7M steps: 15 eaten, 14% survive) and then lost it.
+  **The range is out of reach once the first 20 pellets are gone:** regrowth supplies 0.1 pellets/s x 5
+  = 0.5 glucose/s, and basal decay (ln 2 / 30 s ~ 0.023/s) balances that at ~22 glucose before any
+  movement cost, below the 40-60 range (at intake 10 the balance is ~43, just inside it). To test smaller
+  intake fairly, raise the pellet rate with it (e.g. `--food-regrowth-interval 5`) so that glucose x pellets/s stays the same.
+  Run `sense15_range_intake5_regrow5` (2026-11-12, regrowth every 5 s, i.e. the same 1 glucose/s
+  supply as `sense15_range`): det. eval starved 0.87 (vs 0.27 for `sense15_range`), 18 eaten (26),
+  224 s alive (281), in range 37 s (89), glucose mean 19 (30); random 1.00 / 0.4 / 50 s / 6 s. It
+  forages (move_cmd 0.21, EAT attempt rate 0.85) but barely turns (|turn| 0.06 vs 0.36). Training episodes
+  (`figures/training_sense15_range_intake5_regrow5.png`) rise until ~0.2M steps, then improve slowly and
+  noisily (only ~6 episodes end per rollout): survival 150-250 s, in-range time climbing to ~30-40 s by
+  1.3-1.5M; a dip around 1.1-1.2M recovers, so no clear collapse (unlike the intake-5 run). Not plateaued:
+  more steps may help. So matching the supply rate is not enough:
+  smaller, more frequent pellets make the task harder (twice the pellets to find, each worth less).
 - **Observation (`obs_mode="nearest"`, default)** = `[glucose / glucose_max, can_eat]` followed by,
   for each of the `n_nearest` (k, default 1) nearest pellets within `sensing_range`,
   `[proximity, cos(bearing), sin(bearing), in_reach]`. With k = 1 this is the continuous port of
