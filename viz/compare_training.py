@@ -4,9 +4,11 @@ observation-flag ablation.
 Run with: python viz/compare_training.py --names RUN ... [--labels LABEL ...] [--zoom N] [--out NAME]
 (saves figures/compare_OUT.png and figures/compare_OUT_eat.png)
 
-compare_OUT.png: survival time, fraction of episodes starved, pellets eaten, glucose target error. Top row:
-the whole run; bottom row: the first --zoom env steps, with the rollout boundaries (one PPO update each), to
-count how many updates a run needed (--zoom 0 leaves this row out).
+compare_OUT.png: survival time, fraction of episodes starved, pellets eaten, time in glucose range (s;
+glucose target error before 2026-11-12; runs saved before in_range_time existed are skipped in that panel).
+One row for the whole run; --zoom N adds a second row with the first N env steps and the rollout boundaries
+(one PPO update each), to count how many updates a run needed (default 0: no zoomed row; 100,000 before
+2026-11-12).
 compare_OUT_eat.png (named compare_OUT_homeostasis.png before 2026-11-05, when it also held the target
 error): EAT attempt rate, strike rate and strike miss fraction (strikes: presses with the cooldown passed, counted as if each restarted the cooldown; see
 training/metrics.py), whole run only. Runs trained before the strike metrics existed lack those panels'
@@ -30,7 +32,7 @@ from viz.style import FIGURES_DIR, RUN_COLORS, TEXT_MUTED
 OUTCOME_METRICS = [("time", "survival time (s)", "linear"),
                    ("starved", "fraction of episodes starved", "linear"),
                    ("total_eaten", "pellets eaten", "linear"),
-                   ("glucose_target_error", "glucose target error (log axis)", "log")]
+                   ("in_range_time", "time in glucose range (s)", "linear")]
 EAT_METRICS = [("eat_attempt_rate", "EAT attempt rate (fraction of time held)", "linear"),
                ("eat_strike_rate", "strikes per s alive", "linear"),
                ("eat_strike_miss", "fraction of strikes that miss", "linear")]
@@ -79,8 +81,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--names", nargs="+", required=True, help="runs/NAME directories to compare")
     parser.add_argument("--labels", nargs="+", help="legend labels, one per name (default: the names)")
-    parser.add_argument("--zoom", type=int, default=100_000,
-                        help="env steps shown in the zoomed row (0: no zoomed row)")
+    parser.add_argument("--zoom", type=int, default=0,
+                        help="env steps shown in an extra zoomed row (default 0: no zoomed row)")
     parser.add_argument("--out", default="runs", help="figure names: figures/compare_OUT*.png")
     args = parser.parse_args()
     labels = args.labels or args.names

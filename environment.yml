@@ -5,6 +5,7 @@ dependencies:
   - python=3.12
   - numpy
   - matplotlib
+  - pandas            # reading runs/*/progress.csv
   - pytest
   - ffmpeg
   - gymnasium

@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-11-10_
+_Last updated: 2026-11-19_
 
 ## Status
 
@@ -32,9 +32,13 @@ _Last updated: 2026-11-10_
 | Limited sensing range sweep (2026-11-05) | Done (first look) | `train_ppo.py --sensing-range` (`SENSING_RANGE`, default None = arena diagonal), runs `sense15`, `sense25`, `sense40`; section below |
 | Homeostatic-range reward (2026-11-10) | Built, first run | `metabolism.range_reward` / `in_range` (`GLUCOSE_RANGE`, `IN_RANGE_REWARD_RATE`, `STARVATION_PENALTY`), `ZebrafishEnv(reward_mode="range", glucose_range=, in_range_reward_rate=, starvation_penalty=)`, `train_ppo.py --reward range --glucose-range LOW HIGH --starvation-penalty P`; `viz/animate_ppo.py` shades the range for range-reward runs; run `sense15_range` (sensing 15, defaults, 1.5M steps): det. eval starved 0.27, glucose mean 30, 26 eaten (vs `sense15`, drive reward, 1M: 0.00, 46, 37); decision below |
 | Intake per pellet as a run setting (2026-11-12) | Done, first run | `train_ppo.py --intake-amount G` (default `INTAKE_AMOUNT` = 10), always saved in `env_kwargs.json`; run `sense15_range_intake5` (as `sense15_range`, intake 5, 1.5M steps): det. eval starved 1.00 (30/30), 0.07 eaten, survives 157 s (random 50 s), mean move_cmd 0.01: it sits still and starves slowly. Training peaked at 0.6-0.7M steps (14% survive, 15 eaten, 190 s) then collapsed (1.4M+: 0% survive, 5 eaten); run `sense15_range_intake5_regrow5` (+ `--food-regrowth-interval 5`, same glucose/s as intake 10): starved 0.87, 18 eaten, 224 s, in range 37 s; design decisions entry |
+| Starting glucose range as a run setting (2026-11-12) | Built, run training | `train_ppo.py --glucose-start LOW HIGH` (default `GLUCOSE_START` = (20, 80)), always saved in `env_kwargs.json`; `make_env` falls back to `GLUCOSE_START` for runs that lack it; run `sense15_range_intake5_regrow5_start0_100` (as `sense15_range_intake5_regrow5`, start glucose (0, 100)): worse than the (20, 80) run on either start range; design decisions entry |
+| Run comparison panels updated (2026-11-12) | Done | `viz/compare_training.py`: time in glucose range replaces glucose target error (now that runs use the range reward), and no zoomed row by default (`--zoom N` adds it back); `figures/compare_intake5_regrow5_start.png` |
+| Intake 10 / regrowth 10 s with start (0, 100), sensing 141 vs 15 (2026-11-19) | Done, first run | runs `sense141_range_intake10_regrow10_start0_100`, `..._seed1` (`--seed`; both never learned to eat: sit still, starved 30/30) and `..._seed2` (succeeds: starved 1/30, in range 281 s); intake 5 / regrowth 5 s seeds 0 and 1 both succeed and `sense15_range_intake10_regrow10_start0_100` (starved 0.73, 14 eaten); design decisions entry. `pandas` added to `environment.yml` |
+| Final-model comparison figure (2026-11-19) | Done | `viz/compare_eval.py`: runs side by side on their evaluation episodes (`eval.npz`): survival, starved, eaten, time in range, mean glucose; dots per episode, mean ± SE, random policy mean; repeated `--labels` pool seeds. Use it (not training curves) to compare final performance. `figures/compare_start0_100_eval.png` (sensing 141 vs 15, intake 10 vs 5, start (0, 100)) |
 | **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
-131 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+132 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -523,6 +527,72 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   1.3-1.5M; a dip around 1.1-1.2M recovers, so no clear collapse (unlike the intake-5 run). Not plateaued:
   more steps may help. So matching the supply rate is not enough:
   smaller, more frequent pellets make the task harder (twice the pellets to find, each worth less).
+  Run `sense15_range_intake5_regrow5_start0_100` (2026-11-12, starting glucose (0, 100), `--glucose-start`;
+  ~1% of episodes start below the starvation threshold and starve on the first step). Both models
+  evaluated on both start ranges (same 30 seeds; deterministic):
+
+  | model trained on | eval start | starved | eaten | time (s) | in range (s) | glucose mean |
+  |---|---|---|---|---|---|---|
+  | (20, 80) | (20, 80) | 0.87 | 18.2 | 224 | 37 | 19 |
+  | (20, 80) | (0, 100) | 0.93 | 15.3 | 199 | 32 | 17 |
+  | (0, 100) | (20, 80) | 0.97 | 12.5 | 208 | 30 | 17 |
+  | (0, 100) | (0, 100) | 0.97 | 10.8 | 193 | 26 | 16 |
+
+  The wider start range did not help, even on its own episodes: it forages less (move_cmd 0.12 vs 0.21,
+  EAT attempt rate 0.44 vs 0.85), and its training episodes trail the (20, 80) run at every stage
+  (1.2-1.5M: 88% starved, 12 eaten vs 82%, 19). One seed each, so the gap may partly be seed noise.
+  In its one surviving eval episode (seed 10022) no food grows after ~200 s: the agent stops eating, the
+  arena refills to `max_food` (= `n_food`, 20) and regrowth only fills up to that cap.
+  Run `sense141_range_intake5_regrow5_start0_100` (2026-11-12): same settings with full sensing
+  (`--sensing-range 141`, ~ the 100 x 100 arena's diagonal). Det. eval: starved 0.03 (1/30: seed 10029,
+  at 2.4 s, so it started near 0 and could not have been saved), 71 eaten, 290 s, in range 99 s, glucose
+  mean 37, move_cmd 0.55 (sensing 15: 0.97, 11, 193 s, 26 s, 16, 0.12). It solves survival by 0.3M
+  steps (training: 4% starved) and keeps raising in-range time (37 -> 76 s per episode from 0.3M to
+  1.5M). 71 eaten is near the most on offer (20 at the start + 60 regrown over 300 s = 80), so with
+  full sensing intake 5 is limited by the food supply, not by the reward; with sensing 15 it is search.
+  Runs `sense141_range_intake10_regrow10_start0_100` and `sense15_range_intake10_regrow10_start0_100`
+  (2026-11-19; the default intake 10 and regrowth every 10 s, start (0, 100), range reward, 1.5M steps,
+  ~4 min each). Det. eval (30 seeds):
+
+  | sensing | starved | eaten | time (s) | in range (s) | glucose mean | move_cmd |
+  |---|---|---|---|---|---|---|
+  | 141 | 1.00 | 0.0 | 156 | 9 | 12 | 0.00 |
+  | 15 | 0.73 | 13.7 | 218 | 64 | 20 | 0.16 |
+
+  Full sensing **failed**, unlike its intake-5 counterpart: training episodes ate ~0.4 pellets in the
+  first ~50k steps, then none for the rest of the run (100% starved throughout); survival rose 40 -> 170 s
+  only by moving less (movement cost). The policy holds EAT (attempt rate ~1) and sits still, starving
+  slowly; actions sampled from its Gaussian do no better (seed 10011: 0 eaten, move_cmd 0.01). So it fell
+  into the sit-still local optimum seen in `sense15_range_intake5` early and never got out. Retrained with
+  another seed (`train_ppo.py --seed 1`, new flag: training envs + network; eval seeds fixed), run
+  `sense141_range_intake10_regrow10_start0_100_seed1`: the same failure (starved 30/30, 0 eaten, 155 s,
+  move_cmd 0.00, but EAT attempt rate 0.00 instead of ~1); training ate a pellet now and then until ~0.6M
+  steps, then never. (Two seeds failing alike suggested the settings; a third seed, below, succeeds.) Open question: why full
+  sensing fails here while sensing 15 (same settings) learns and full sensing with intake 5 / regrowth 5 s
+  succeeds. The runs split in the first ~100k steps (training episodes, mean eaten / fraction that ate
+  at least one, over 0-50k, 50-100k, 100-200k steps): intake 5 0.45/0.32, 1.20/0.61, 18.4/0.89;
+  intake 10 seed 0 0.19/0.16, 0.02/0.02, 0.00/0.00; seed 1 0.25/0.21, 0.16/0.14, 0.03/0.03. The intake-5
+  run ate about twice as often from the start and built on it; the intake-10 runs' rare early meals
+  died out. Second intake-5 seed, run `sense141_range_intake5_regrow5_start0_100_seed1`: succeeds again
+  (det. eval starved 0.03, the same seed-10029 episode that starts near 0; 70 eaten, 290 s, in range
+  151 s vs 99 s for seed 0, glucose mean 41, move_cmd 0.46). Early training matches seed 0 (0.47/0.32,
+  0.64/0.49, 10.3/0.78), starved < 10% by 0.2-0.3M steps.
+  Third intake-10 seed, run `sense141_range_intake10_regrow10_start0_100_seed2`: **succeeds** (det. eval
+  starved 0.03, seed 10029 again; 38 eaten, 290 s, in range 281 s, glucose mean 49 +- 4.7, move_cmd 0.22),
+  holding glucose in range far better than either intake-5 seed (99, 151 s). Its first 50k steps look like
+  the failed seeds (0.19/0.15), but 50-100k it ate more (0.59/0.34 vs 0.02/0.02 and 0.16/0.14) and took
+  off (100-200k: 21/0.87, starved 0.50; < 5% from 0.2M on). So whether a run learns to eat is decided by
+  chance in the first ~100k steps: intake 10 / regrowth 10 s succeeds 1/3 seeds, intake 5 / regrowth 5 s
+  2/2. The earlier conclusion "the settings, not bad luck" (from 0/2 intake-10 seeds) was wrong: intake 10 is
+  more fragile, not impossible. When it does learn, intake 10 stays in range better. Its training survival
+  jumps to 300 s at ~0.15M steps; in-range time rises in two stages (~150 s by 0.2M, ~280 s by 0.9M) while
+  pellets eaten drift down from ~47 to ~40 (it learns to eat less, not more). Figures:
+  `figures/training_<run>.png`, `figures/ppo_<run>_seed{10011,10025,10029_starved}.mp4`. Sensing 15 learns by ~0.2M steps, then stays noisy
+  (rollout survival 100-300 s) with no clear upward trend; its eval splits into episodes that never eat
+  (seeds 10003-5, 10012, 10014, ...: low start glucose, starved by ~130 s), ones that eat and still
+  starve, and 9 that survive (24-41 eaten). Figures: `figures/training_<run>.png`, animations
+  `figures/ppo_<run>_seed{10020,10018_starved,10003_starved}.mp4` (sensing 15) and
+  `figures/ppo_<run>_seed10011[_sampled]_starved.mp4` (sensing 141).
 - **Observation (`obs_mode="nearest"`, default)** = `[glucose / glucose_max, can_eat]` followed by,
   for each of the `n_nearest` (k, default 1) nearest pellets within `sensing_range`,
   `[proximity, cos(bearing), sin(bearing), in_reach]`. With k = 1 this is the continuous port of

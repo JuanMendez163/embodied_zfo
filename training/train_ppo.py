@@ -6,6 +6,7 @@ Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FL
                                      [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]
                                      [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH]
                                      [--starvation-penalty P] [--intake-amount G]
+                                     [--glucose-start LOW HIGH]
 (writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pellet regrown every 10 s,
 300 s episodes (HIDE_FLAGS, EAT_COST, FOOD_REGROWTH_INTERVAL, EPISODE_DURATION below).
@@ -25,6 +26,8 @@ Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pell
   with glucose inside --glucose-range LOW HIGH (default 40 60), 0 outside it, and -P once on starving
   (--starvation-penalty, default 100) (ZebrafishEnv's reward_mode, glucose_range, starvation_penalty).
 --intake-amount G: glucose gained per pellet eaten (ZebrafishEnv's intake_amount; default INTAKE_AMOUNT, 10).
+--glucose-start LOW HIGH: starting glucose drawn uniformly from [LOW, HIGH] at every reset (ZebrafishEnv's
+  glucose_start; default GLUCOSE_START, 20 80). Runs whose env_kwargs.json lacks it replay with GLUCOSE_START.
 env_kwargs.json records every one of these settings explicitly, so a run replays the same however the
 defaults change. ZebrafishEnv's own defaults are unchanged (all flags observed, no cost), so runs saved
 with env_kwargs.json = {} still replay as trained.
@@ -82,7 +85,8 @@ REWARD_MODES = ("drive", "range")
 def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FOOD_REGROWTH_INTERVAL,
                    episode_duration=EPISODE_DURATION, food_per_regrowth=FOOD_PER_REGROWTH,
                    sensing_range=SENSING_RANGE, reward_mode=REWARD_MODE, glucose_range=GLUCOSE_RANGE,
-                   starvation_penalty=STARVATION_PENALTY, intake_amount=INTAKE_AMOUNT):
+                   starvation_penalty=STARVATION_PENALTY, intake_amount=INTAKE_AMOUNT,
+                   glucose_start=GLUCOSE_START):
     """
     The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth, the
     episode length and the reward set explicitly (saved as env_kwargs.json). hide: observation flags to
@@ -90,7 +94,8 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
     regrowth ticks (None or 0: off); episode_duration: s; food_per_regrowth: pellets grown at each tick;
     sensing_range: arena units (None or 0: the arena diagonal, sees everything); reward_mode: one of
     REWARD_MODES; glucose_range, starvation_penalty: the range reward's (low, high) and one-off penalty
-    (recorded only when reward_mode is "range"); intake_amount: glucose per pellet eaten.
+    (recorded only when reward_mode is "range"); intake_amount: glucose per pellet eaten;
+    glucose_start: (low, high) range the starting glucose is drawn from.
     """
     if eat_cost not in EAT_COSTS:
         raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
@@ -105,15 +110,18 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
             "food_regrowth_interval": food_regrowth_interval or None,
             "food_per_regrowth": food_per_regrowth,
             "sensing_range": sensing_range or None,
-            "episode_duration": episode_duration, "intake_amount": intake_amount, **reward}
+            "episode_duration": episode_duration, "intake_amount": intake_amount,
+            "glucose_start": list(glucose_start), **reward}
 
 
 def make_env(seed=None, **env_kwargs):
     """
     The env in physical action units, as the random baseline uses it.
-    env_kwargs (e.g. observe_in_reach=False) are passed on to ZebrafishEnv.
+    env_kwargs (e.g. observe_in_reach=False) are passed on to ZebrafishEnv; glucose_start defaults to
+    GLUCOSE_START (runs saved before it was recorded).
     """
-    return ZebrafishEnv(dt=DT, glucose_start=GLUCOSE_START, seed=seed, **env_kwargs)
+    env_kwargs = {"glucose_start": GLUCOSE_START, **env_kwargs}
+    return ZebrafishEnv(dt=DT, seed=seed, **env_kwargs)
 
 
 def make_ppo_env(seed=None, **env_kwargs):
@@ -209,20 +217,24 @@ if __name__ == "__main__":
                         help="one-off penalty on starving for --reward range (default: 100)")
     parser.add_argument("--intake-amount", type=float, default=INTAKE_AMOUNT,
                         help="glucose gained per pellet eaten (default: 10)")
+    parser.add_argument("--glucose-start", type=float, nargs=2, default=list(GLUCOSE_START),
+                        metavar=("LOW", "HIGH"), help="starting glucose range, sampled uniformly (default: 20 80)")
+    parser.add_argument("--seed", type=int, default=SEED,
+                        help="seed for the training envs and the PPO network (default: 0); evaluation seeds are fixed")
     args = parser.parse_args()
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = run_env_kwargs(args.hide, args.eat_cost, args.food_regrowth_interval, args.episode_duration,
                                 args.food_per_regrowth, args.sensing_range, args.reward, args.glucose_range,
-                                args.starvation_penalty, args.intake_amount)
+                                args.starvation_penalty, args.intake_amount, args.glucose_start)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)
     env_fn = functools.partial(make_env, **env_kwargs)
     ppo_env_fn = functools.partial(make_ppo_env, **env_kwargs)
 
-    vec_env = make_vec_env(ppo_env_fn, n_envs=N_ENVS, seed=SEED) # creates N_ENVS copies of the env, each with a different seed
+    vec_env = make_vec_env(ppo_env_fn, n_envs=N_ENVS, seed=args.seed) # creates N_ENVS copies of the env, each with a different seed
     model = PPO("MlpPolicy", vec_env, n_steps=N_STEPS, batch_size=256, gamma=GAMMA, gae_lambda=0.95,
-                seed=SEED, device="cpu", verbose=0)   # small MLPs: CPU is as fast as MPS for PPO
+                seed=args.seed, device="cpu", verbose=0)   # small MLPs: CPU is as fast as MPS for PPO
     model.set_logger(configure(run_dir, ["stdout", "csv"]))
     probe = env_fn()
     # callback: runs at every env step and collects step info
