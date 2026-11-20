@@ -3,7 +3,7 @@
 Status, decisions and next steps for porting embodied_organs' `GridWorld` to a continuous
 environment. Update this file whenever a step is completed or a decision is made.
 
-_Last updated: 2026-11-19_
+_Last updated: 2026-11-20_
 
 ## Status
 
@@ -36,9 +36,10 @@ _Last updated: 2026-11-19_
 | Run comparison panels updated (2026-11-12) | Done | `viz/compare_training.py`: time in glucose range replaces glucose target error (now that runs use the range reward), and no zoomed row by default (`--zoom N` adds it back); `figures/compare_intake5_regrow5_start.png` |
 | Intake 10 / regrowth 10 s with start (0, 100), sensing 141 vs 15 (2026-11-19) | Done, first run | runs `sense141_range_intake10_regrow10_start0_100`, `..._seed1` (`--seed`; both never learned to eat: sit still, starved 30/30) and `..._seed2` (succeeds: starved 1/30, in range 281 s); intake 5 / regrowth 5 s seeds 0 and 1 both succeed and `sense15_range_intake10_regrow10_start0_100` (starved 0.73, 14 eaten); design decisions entry. `pandas` added to `environment.yml` |
 | Final-model comparison figure (2026-11-19) | Done | `viz/compare_eval.py`: runs side by side on their evaluation episodes (`eval.npz`): survival, starved, eaten, time in range, mean glucose; dots per episode, mean ± SE, random policy mean; repeated `--labels` pool seeds. Use it (not training curves) to compare final performance. `figures/compare_start0_100_eval.png` (sensing 141 vs 15, intake 10 vs 5, start (0, 100)) |
+| Wall-contact observation (2026-11-20) | Done, first run | `ZebrafishEnv(observe_wall=True)` appends `hit_wall` (last move pushed into a wall) to the internal state; `train_ppo.py --observe-wall` (default off, always saved in `env_kwargs.json`); `probe_observations(hit_wall=)`; tests in `test_env.py`, `test_train_ppo.py`, `test_probe.py`; design decisions entry. Run `sense15_range_intake10_regrow10_start0_100_wall` (as `sense15_range_intake10_regrow10_start0_100` + `--observe-wall`, seed 0, 1.5M steps): det. eval starved 4/30 vs 22/30, 37 eaten vs 14, in range 132 s vs 64 s, glucose mean 36 vs 20, move 0.51 vs 0.16. Blind probe: no contact = cruise straight (move 0.5-1.2 rising with glucose, turn ~0); contact = stop and turn hard right (move ~0, turn -1.05). Training curves separate from ~0.4M steps. One seed each. `figures/compare_sense15_wall_eval.png`, `compare_sense15_wall.png`. Run `sense141_range_intake10_regrow10_start0_100_wall` (seed 0): learns (starved 1/30, 46 eaten, in range 257 s, glucose mean 46), like no-wall seed 2 (1/30, 38, 281 s, 49); no-wall seeds 0 and 1 never learned to eat. Not evidence that the flag helps with full vision: no-wall succeeds on 1 of 3 seeds, and the wall run's seed 0 is not paired with no-wall seed 0 (the extra input changes the network's initialization). `figures/compare_sense141_wall_eval.png`, `compare_sense141_wall.png` |
 | **3d.2c Planning horizon vs food depletion** | **Next** | `training/train_ppo.py` (`HORIZON`) |
 
-132 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
+136 tests pass (`pytest -q`). Paths are relative to the repo root; files were moved into packages on
 2026-10-26 (layout and commands in `CLAUDE.md`). The reorganization is committed; the per-episode metrics work (2026-10-27) is not committed yet.
 
 ## First PPO run (2026-10-26)
@@ -609,6 +610,18 @@ reporting `1 - d / range` of the nearest pellet in range (`EFishAgent._update_se
   - **`sensing_range` defaults to the arena diagonal** (sees everything, closest to GridWorld) so a
     failed first training run is not due to limited sensing. A shorter range is more biological.
   - `obs_mode="internal"` (glucose, can_eat only) is kept as a blind baseline.
+- **Wall-contact flag** (2026-11-20, `observe_wall=True`, `train_ppo.py --observe-wall`; default off):
+  `hit_wall` is appended to the internal state, `[glucose, can_eat, hit_wall]`, before the food rows.
+  It is 1 if the last move was clipped by a wall (`movement.enforce_bounds`), i.e. the agent pushed into
+  it; swimming exactly parallel to a wall or sitting still against one gives 0; 0 after reset. Reason:
+  with limited sensing, a blind agent sees `[glucose, 0, 0, 0]` in open water and when stuck at a wall,
+  so a memoryless policy has one blind action per glucose level; starving `sense*` agents spent a third
+  to half of their last blind minute within 3 units of a wall. A touch sense, binary and without
+  direction, chosen as the simplest fix; if agents still get stuck (e.g. in corners), the next step is a
+  wall sensor in the food-row format (proximity and cos/sin bearing of the nearest wall point within a
+  range, like the lateral line). A state, not a rate, so dt-independent. Off by default in both the env
+  and `train_ppo.py`, so older runs (no `observe_wall` in `env_kwargs.json`) replay unchanged. Wall
+  contact time is not yet an evaluation metric.
 - **Reward scale:** reward = drive reduction / `reward_scale`, default = one pellet's worth
   (`drive(target - intake, target)` = 100 at the current defaults): eating from 40 to 50 gives +1,
   near starvation (5 -> 15) +8, starving totals about -25. A positive constant keeps every ratio

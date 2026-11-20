@@ -30,7 +30,7 @@ def test_ppo_reward_is_scaled_drive_reward():
 
 def test_default_run_hides_flags_with_attempt_cost():
     kwargs = run_env_kwargs()
-    assert kwargs == {"observe_can_eat": False, "observe_in_reach": False,
+    assert kwargs == {"observe_can_eat": False, "observe_in_reach": False, "observe_wall": False,
                       "eat_attempt_resets_cooldown": True, "eat_press_resets_cooldown": False,
                       "food_regrowth_interval": 10.0, "food_per_regrowth": 1, "sensing_range": None,
                       "episode_duration": 300.0, "intake_amount": 10.0,
@@ -43,7 +43,7 @@ def test_default_run_hides_flags_with_attempt_cost():
 def test_run_env_kwargs_options():
     assert run_env_kwargs(hide=[], eat_cost="none", food_regrowth_interval=0, episode_duration=120.0,
                           food_per_regrowth=3, sensing_range=25.0) == {
-        "observe_can_eat": True, "observe_in_reach": True,
+        "observe_can_eat": True, "observe_in_reach": True, "observe_wall": False,
         "eat_attempt_resets_cooldown": False, "eat_press_resets_cooldown": False,
         "food_regrowth_interval": None, "food_per_regrowth": 3, "sensing_range": 25.0,
         "episode_duration": 120.0, "intake_amount": 10.0,
@@ -77,3 +77,12 @@ def test_run_env_kwargs_glucose_start():
     assert tuple(make_ppo_env(**kwargs).unwrapped.glucose_start) == (0.0, 100.0)
     old = {k: v for k, v in kwargs.items() if k != "glucose_start"}   # runs saved before it was recorded
     assert tuple(make_ppo_env(**old).unwrapped.glucose_start) == (20.0, 80.0)
+
+
+def test_run_env_kwargs_observe_wall():
+    kwargs = run_env_kwargs(observe_wall=True)
+    assert kwargs["observe_wall"] is True
+    env = make_ppo_env(**kwargs)
+    assert env.unwrapped.observe_wall and env.observation_space.shape == (5,)   # glucose, hit_wall, food
+    old = {k: v for k, v in kwargs.items() if k != "observe_wall"}     # runs saved before it existed
+    assert not make_ppo_env(**old).unwrapped.observe_wall

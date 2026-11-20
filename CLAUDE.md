@@ -61,9 +61,9 @@ so `import zfo` works from any directory and scripts can be run by path.
 - Tests: `conda run -n embodied_zfo python -m pytest -q` (all should pass before committing).
 - Visual checks: `conda run -n embodied_zfo python viz/animate_env.py` (and the other `viz/` scripts);
   outputs go to the repo-root `figures/` from any working directory.
-- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [can_eat] [in_reach]] [--eat-cost none|attempt|press] [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S] [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH] [--starvation-penalty P] [--intake-amount G] [--glucose-start LOW HIGH] [--seed S]` (~3 min for
+- Training: `conda run -n embodied_zfo python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [can_eat] [in_reach]] [--eat-cost none|attempt|press] [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S] [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH] [--starvation-penalty P] [--intake-amount G] [--glucose-start LOW HIGH] [--observe-wall] [--seed S]` (~3 min for
   the default 1M steps). **Defaults (2026-11-03): both flags hidden, attempt cost, a pellet regrown every 10 s, 300 s episodes, drive reward** (`HIDE_FLAGS`, `EAT_COST`, `FOOD_REGROWTH_INTERVAL`, `EPISODE_DURATION` in
-  `train_ppo.py`; `--hide` with no flags observes both). `ZebrafishEnv`'s own defaults stay all-observed / no cost / no regrowth / 120 s,
+  `train_ppo.py`; `--hide` with no flags observes both). `--observe-wall` adds the wall-contact flag `hit_wall` (off by default). `ZebrafishEnv`'s own defaults stay all-observed (but no wall flag) / no cost / no regrowth / 120 s,
   so older runs whose `env_kwargs.json` is `{}` replay unchanged; new runs save every setting explicitly
   (`run_env_kwargs`). Writes `runs/NAME/model.zip`, `env_kwargs.json` (read back by `load_env_kwargs`, so replay and probes rebuild the same observation), `progress.csv`, `train_episodes.npz` (every training episode's metrics, with timestep and env) and `eval.npz` (per-episode evaluation metrics), then prints the random /
   PPO table). SB3 prints a table every update, so redirect stdout to a log file.

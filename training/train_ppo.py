@@ -6,12 +6,14 @@ Run with: python training/train_ppo.py [--timesteps N] [--name NAME] [--hide [FL
                                      [--food-regrowth-interval S] [--food-per-regrowth N] [--episode-duration S]
                                      [--sensing-range R] [--reward drive|range] [--glucose-range LOW HIGH]
                                      [--starvation-penalty P] [--intake-amount G]
-                                     [--glucose-start LOW HIGH]
+                                     [--glucose-start LOW HIGH] [--observe-wall]
 (writes runs/NAME/: model, env_kwargs.json, progress.csv, train_episodes.npz, eval.npz)
 Defaults (since 2026-11-03): can_eat and in_reach hidden, attempt cost, one pellet regrown every 10 s,
 300 s episodes (HIDE_FLAGS, EAT_COST, FOOD_REGROWTH_INTERVAL, EPISODE_DURATION below).
 --hide FLAG ... drops those flags from the observation (ZebrafishEnv's observe_can_eat / observe_in_reach);
   --hide with no flags observes both.
+--observe-wall: add hit_wall (1 if the last move pushed into a wall) to the observation (ZebrafishEnv's
+  observe_wall; default off). Runs whose env_kwargs.json lacks it replay without it.
 --eat-cost none | attempt | press: failed EATs are free (GridWorld) | a press with the cooldown passed
   restarts it, eaten or not (eat_attempt_resets_cooldown) | every press restarts it, even during the
   cooldown (eat_press_resets_cooldown).
@@ -72,6 +74,7 @@ RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"   # repo-root runs/, whe
 # default run configuration (2026-11-03): no observation flags, failed EATs cost a cooldown
 # (trains reliably and its mean action also works; see docs/PORTING_NOTES.md)
 HIDE_FLAGS = ("can_eat", "in_reach")
+OBSERVE_WALL = False              # wall-contact flag in the observation
 EAT_COST = "attempt"
 EAT_COSTS = ("none", "attempt", "press")
 FOOD_REGROWTH_INTERVAL = 10.0     # s per regrowth tick (0.1 pellets/s; staying at target needs ~0.13-0.15/s)
@@ -86,7 +89,7 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
                    episode_duration=EPISODE_DURATION, food_per_regrowth=FOOD_PER_REGROWTH,
                    sensing_range=SENSING_RANGE, reward_mode=REWARD_MODE, glucose_range=GLUCOSE_RANGE,
                    starvation_penalty=STARVATION_PENALTY, intake_amount=INTAKE_AMOUNT,
-                   glucose_start=GLUCOSE_START):
+                   glucose_start=GLUCOSE_START, observe_wall=OBSERVE_WALL):
     """
     The ZebrafishEnv kwargs of a run, with every observation flag, EAT rule, the food regrowth, the
     episode length and the reward set explicitly (saved as env_kwargs.json). hide: observation flags to
@@ -95,7 +98,8 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
     sensing_range: arena units (None or 0: the arena diagonal, sees everything); reward_mode: one of
     REWARD_MODES; glucose_range, starvation_penalty: the range reward's (low, high) and one-off penalty
     (recorded only when reward_mode is "range"); intake_amount: glucose per pellet eaten;
-    glucose_start: (low, high) range the starting glucose is drawn from.
+    glucose_start: (low, high) range the starting glucose is drawn from; observe_wall: whether the
+    wall-contact flag is observed.
     """
     if eat_cost not in EAT_COSTS:
         raise ValueError(f"eat_cost must be one of {EAT_COSTS}, got {eat_cost!r}")
@@ -105,6 +109,7 @@ def run_env_kwargs(hide=HIDE_FLAGS, eat_cost=EAT_COST, food_regrowth_interval=FO
     if reward_mode == "range":
         reward.update({"glucose_range": list(glucose_range), "starvation_penalty": starvation_penalty})
     return {"observe_can_eat": "can_eat" not in hide, "observe_in_reach": "in_reach" not in hide,
+            "observe_wall": observe_wall,
             "eat_attempt_resets_cooldown": eat_cost == "attempt",
             "eat_press_resets_cooldown": eat_cost == "press",
             "food_regrowth_interval": food_regrowth_interval or None,
@@ -199,6 +204,8 @@ if __name__ == "__main__":
     parser.add_argument("--name", default="ppo")
     parser.add_argument("--hide", nargs="*", default=list(HIDE_FLAGS), choices=["can_eat", "in_reach"],
                         help="observation flags to leave out (default: both; --hide alone observes both)")
+    parser.add_argument("--observe-wall", action="store_true",
+                        help="observe hit_wall, whether the last move pushed into a wall (default: off)")
     parser.add_argument("--eat-cost", default=EAT_COST, choices=EAT_COSTS,
                         help="what a failed EAT costs (default: attempt)")
     parser.add_argument("--food-regrowth-interval", type=float, default=FOOD_REGROWTH_INTERVAL,
@@ -225,7 +232,8 @@ if __name__ == "__main__":
     run_dir = os.path.join(RUNS_DIR, args.name)
     env_kwargs = run_env_kwargs(args.hide, args.eat_cost, args.food_regrowth_interval, args.episode_duration,
                                 args.food_per_regrowth, args.sensing_range, args.reward, args.glucose_range,
-                                args.starvation_penalty, args.intake_amount, args.glucose_start)
+                                args.starvation_penalty, args.intake_amount, args.glucose_start,
+                                args.observe_wall)
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "env_kwargs.json"), "w") as f:
         json.dump(env_kwargs, f)

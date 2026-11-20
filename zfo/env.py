@@ -54,6 +54,9 @@ class ZebrafishEnv(gym.Env):
      - "internal": nothing else (a blind baseline)
     observe_can_eat=False / observe_in_reach=False drop that flag from the observation (ablations: the
     agent must then infer the cooldown, or reachability from proximity and bearing).
+    observe_wall=True appends hit_wall to the internal state (default False): 1 if the last move pushed
+    into a wall (the position was clipped, see movement.enforce_bounds), else 0 (and 0 after reset). A
+    touch sense with no direction, so a blind agent can tell open water from being stuck at a wall.
     eat_attempt_resets_cooldown=True makes a failed EAT cost something: an attempt restarts the cooldown
     whether or not it eats (default False: only a successful eat does, as in GridWorld).
     food_regrowth_interval (s, default None = off) grows food_per_regrowth pellets (default 1), placed
@@ -84,7 +87,8 @@ class ZebrafishEnv(gym.Env):
                  drive_n=2, drive_m=1, reward_mode="drive", glucose_range=GLUCOSE_RANGE,
                  in_range_reward_rate=IN_RANGE_REWARD_RATE, starvation_penalty=STARVATION_PENALTY,
                  reward_scale=None, obs_mode="nearest", n_nearest=1, sensing_range=None,
-                 observe_can_eat=True, observe_in_reach=True, eat_attempt_resets_cooldown=False,
+                 observe_can_eat=True, observe_in_reach=True, observe_wall=False,
+                 eat_attempt_resets_cooldown=False,
                  eat_press_resets_cooldown=False, seed=None):
         super().__init__()
         self.arena = Arena(size=arena_size, n_food=n_food, food_min_distance=food_min_distance,
@@ -151,11 +155,13 @@ class ZebrafishEnv(gym.Env):
                               if sensing_range is None else sensing_range)
         self.observe_can_eat = observe_can_eat              # False: cooldown flag left out of the observation
         self.observe_in_reach = observe_in_reach            # False: in_reach column left out of the food rows
+        self.observe_wall = observe_wall                    # True: hit_wall (wall contact on the last move) observed
+        self.hit_wall = False                               # whether the last move pushed into a wall
 
         # ranges of the different actions
         self.action_space = spaces.Box(low=np.array([0.0, -1.0, 0.0], dtype=np.float32),
                                        high=np.array([1.0, 1.0, 1.0], dtype=np.float32))
-        obs_low = [0.0] + [0.0] * observe_can_eat           # glucose, can_eat
+        obs_low = [0.0] + [0.0] * observe_can_eat + [0.0] * observe_wall   # glucose, can_eat, hit_wall
         if obs_mode == "nearest":
             obs_low += ([0.0, -1.0, -1.0] + [0.0] * observe_in_reach) * n_nearest   # proximity, cos, sin, in_reach per pellet
         # observation_space maps the range of all possible observations
@@ -178,6 +184,7 @@ class ZebrafishEnv(gym.Env):
 
         self.glucose = self._initial_glucose()          # drawn after food, so positions match a fixed start (comparing fixed starting glucose vs. random)
         self.time_since_last_eat = self.eat_cooldown    # first eat is allowed immediately
+        self.hit_wall = False                           # no move yet
         self.step_count = 0
         self.total_eaten = 0
         return self._get_obs(), self._get_info()
@@ -199,6 +206,7 @@ class ZebrafishEnv(gym.Env):
             self.position, self.heading, move_cmd, turn_cmd, self.max_speed, self.max_turn_rate, self.dt,
             self.arena.size, self.body_radius)
         self.heading = float(self.heading)
+        self.hit_wall = hit_wall                            # observed on the next step (observe_wall)
 
         # 3. regrow food (nothing happens, and no random numbers are drawn, when regrowth is off)
         n_grown = self.arena.regrow_food(self.dt, avoid=self.position)
@@ -286,10 +294,11 @@ class ZebrafishEnv(gym.Env):
 
     def _get_obs(self):
         """
-        Internal state, then (obs_mode="nearest") the flattened (n_nearest, 4) food sensor, without the
-        flags that observe_can_eat / observe_in_reach leave out.
+        Internal state [glucose, can_eat, hit_wall], then (obs_mode="nearest") the flattened (n_nearest, 4)
+        food sensor, without the flags that observe_can_eat / observe_in_reach / observe_wall leave out.
         """
-        internal = [self.glucose / self.glucose_max] + [float(self.can_eat())] * self.observe_can_eat
+        internal = ([self.glucose / self.glucose_max] + [float(self.can_eat())] * self.observe_can_eat
+                    + [float(self.hit_wall)] * self.observe_wall)
         if self.obs_mode == "internal":
             return np.array(internal, dtype=np.float32)
         food = nearest_food_observation(self.position, self.heading, self.arena.food_positions,

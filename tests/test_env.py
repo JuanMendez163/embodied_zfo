@@ -27,7 +27,8 @@ def env_with_pellet_ahead(**kwargs):
 
 def test_passes_gymnasium_checker():
     for kwargs in [{}, {"obs_mode": "internal"}, {"n_nearest": 3}, {"sensing_range": 20.0},
-                   {"observe_can_eat": False, "observe_in_reach": False, "n_nearest": 2}]:
+                   {"observe_can_eat": False, "observe_in_reach": False, "n_nearest": 2},
+                   {"observe_wall": True}, {"observe_wall": True, "obs_mode": "internal"}]:
         check_env(ZebrafishEnv(**kwargs), skip_render_check=True)
 
 
@@ -58,6 +59,29 @@ def test_hidden_flags_are_dropped_from_observation():
         obs = env._get_obs()
         assert env.observation_space.contains(obs)
         assert np.array_equal(obs, full[kept])
+
+
+def test_wall_flag_follows_the_last_move():
+    # agent 0.5 from the right wall facing it; its column follows glucose and can_eat
+    env = env_with_pellet_ahead(observe_wall=True)
+    obs = env._get_obs()
+    assert obs.shape == (7,) and obs[2] == 0.0
+    assert np.array_equal(np.delete(obs, 2), env_with_pellet_ahead()._get_obs())
+    env.arena.food_positions = np.empty((0, 2))
+    env.position = np.array([100.0 - env.body_radius - 0.5, 50.0])
+    obs, _, _, _, info = env.step([1.0, 0.0, 0.0])         # swims into the wall
+    assert info["hit_wall"] and obs[2] == 1.0 and env.observation_space.contains(obs)
+    assert env.step(IDLE)[0][2] == 0.0                      # still at the wall, but not pushing
+    env.step([1.0, 0.0, 0.0])
+    assert env.reset(seed=0)[0][2] == 0.0                   # cleared on reset
+
+
+def test_wall_flag_is_off_by_default():
+    env = ZebrafishEnv()
+    env.reset(seed=0)
+    env.position, env.heading = np.array([100.0 - env.body_radius - 0.5, 50.0]), 0.0
+    obs, _, _, _, info = env.step([1.0, 0.0, 0.0])
+    assert info["hit_wall"] and obs.shape == (6,)
 
 
 def test_hidden_in_reach_is_dropped_for_every_sensed_pellet():

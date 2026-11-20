@@ -37,6 +37,22 @@ def test_probe_drops_hidden_flags():
     assert np.allclose(probe[0], base._get_obs(), atol=1e-6)
 
 
+def test_probe_includes_wall_flag():
+    # pellet as above, all flags observed plus the wall flag; agent pushed into the right wall
+    env = make_ppo_env(observe_wall=True)
+    env.reset(seed=0)
+    base = env.unwrapped
+    base.position, base.heading = np.array([100.0 - base.body_radius - 0.5, 50.0]), 0.0
+    base.arena.food_positions = np.empty((0, 2))
+    base.step([1.0, 0.0, 0.0])
+    base.position = np.array([50.0, 50.0])                 # move it away; hit_wall stays from the step
+    base.arena.food_positions = 50.0 + 10.0 * np.array([[math.cos(math.pi / 4), math.sin(math.pi / 4)]])
+    probe = probe_observations(env, base.glucose, can_eat=float(base.can_eat()), hit_wall=1.0,
+                               proximity=1 - 10.0 / base.sensing_range, bearing=math.pi / 4)
+    assert probe.shape == (1, 7)
+    assert np.allclose(probe[0], base._get_obs(), atol=1e-6)
+
+
 def test_probe_observations_broadcast_a_sweep():
     env = make_ppo_env()
     obs = probe_observations(env, np.linspace(0, 100, 7), proximity=0.5)

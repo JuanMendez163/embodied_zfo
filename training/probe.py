@@ -18,25 +18,26 @@ import torch
 from zfo.env import EAT_THRESHOLD
 
 
-def probe_observations(env, glucose, can_eat=1.0, proximity=0.0, bearing=0.0, in_reach=0.0):
+def probe_observations(env, glucose, can_eat=1.0, proximity=0.0, bearing=0.0, in_reach=0.0, hit_wall=0.0):
     """
     (N, obs_dim) observations in the layout of env._get_obs (obs_mode="nearest", n_nearest=1):
-    [glucose / glucose_max, can_eat, proximity, cos(bearing), sin(bearing), in_reach].
+    [glucose / glucose_max, can_eat, hit_wall, proximity, cos(bearing), sin(bearing), in_reach].
     Arguments broadcast against each other, so sweep one (an array) and hold the rest fixed (scalars).
     glucose is in env units; bearing in rad (0 = ahead, positive = left).
     Not every combination occurs in the env: in_reach = 1 needs proximity > 1 - eat_radius / sensing_range
     and |bearing| < mouth_angle / 2, and "nothing sensed" is an all-zero food row (cos and sin both 0),
-    which no bearing gives; for that, set observations[:, 2:] = 0.
-    Columns the env leaves out (observe_can_eat / observe_in_reach = False) are dropped, and their
-    arguments ignored; then the column indices above shift.
+    which no bearing gives; for that, set the last 4 columns (3 with in_reach hidden) to 0.
+    Columns the env leaves out (observe_can_eat / observe_in_reach = False, observe_wall = False, the env
+    default) are dropped, and their arguments ignored; then the column indices above shift.
     """
     if env.unwrapped.obs_mode != "nearest" or env.unwrapped.n_nearest != 1:
         raise ValueError("probe_observations assumes obs_mode='nearest' and n_nearest=1")
-    glucose, can_eat, proximity, bearing, in_reach = np.broadcast_arrays(
-        *(np.asarray(x, dtype=float) for x in (glucose, can_eat, proximity, bearing, in_reach)))
-    columns = [glucose / env.unwrapped.glucose_max, can_eat, proximity, np.cos(bearing), np.sin(bearing),
-               in_reach]
-    observed = [True, env.unwrapped.observe_can_eat, True, True, True, env.unwrapped.observe_in_reach]
+    glucose, can_eat, hit_wall, proximity, bearing, in_reach = np.broadcast_arrays(
+        *(np.asarray(x, dtype=float) for x in (glucose, can_eat, hit_wall, proximity, bearing, in_reach)))
+    columns = [glucose / env.unwrapped.glucose_max, can_eat, hit_wall, proximity, np.cos(bearing),
+               np.sin(bearing), in_reach]
+    observed = [True, env.unwrapped.observe_can_eat, env.unwrapped.observe_wall, True, True, True,
+                env.unwrapped.observe_in_reach]
     columns = [c for c, keep in zip(columns, observed) if keep]
     return np.column_stack([np.ravel(c) for c in columns]).astype(np.float32)
 
